@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 
 // Importation corrigée du routeur des créneaux
 import creneauxRoutes from './Gestion/creneaux.js'; // Correction du nom de fichier
+import creneauxRoute from './Gestion/gestionCreneaux.js';
 
 dotenv.config();
 const app = express();
@@ -33,6 +34,7 @@ app.get('/', (req, res) => {
 
 // Utilisation du routeur des créneaux
 app.use('/api/creneaux', creneauxRoutes);
+app.use('/api/gestioncreneaux', creneauxRoute);
 
 // 🏥 Health check endpoint
 app.get('/api/health', (req, res) => {
