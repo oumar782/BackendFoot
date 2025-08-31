@@ -22,20 +22,22 @@ router.get('/creneaux', async (req, res) => {
       });
     }
 
+    // 📌 REQUÊTE SQL CORRIGÉE : ajout de WHERE clause manquante
     let sql = `
-      SELECT 
+     SELECT 
         idcreneaux,
         TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
         heure,
+        heurefin,
         statut,
         numeroterrain,
         typeTerrain,
-        heurefin,
         nomterrain,
-        SurfaceTerrains
+        SurfaceTerrains,
+        tarif
       FROM creneaux 
       WHERE typeTerrain = $1 
-      AND TO_CHAR(datecreneaux, 'YYYY-MM-DD') = $2
+        AND TO_CHAR(datecreneaux, 'YYYY-MM-DD') = $2
     `;
     
     let params = [terrainType, date];
@@ -51,6 +53,11 @@ router.get('/creneaux', async (req, res) => {
     console.log('📦 Paramètres:', params);
 
     const result = await db.query(sql, params);
+    
+    console.log('📊 Résultats trouvés:', result.rows.length);
+    if (result.rows.length > 0) {
+      console.log('📝 Premier résultat:', result.rows[0]);
+    }
     
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -78,4 +85,94 @@ router.get('/creneaux', async (req, res) => {
   }
 });
 
-export default router;
+// 📌 Route pour récupérer un créneau spécifique par ID
+router.get('/creneaux/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const sql = `
+      SELECT 
+        idcreneaux,
+        TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+        heure,
+        heurefin,
+        statut,
+        numeroterrain,
+        typeTerrain,
+        nomterrain,
+        SurfaceTerrains,
+        tarif
+      FROM creneaux 
+      WHERE idcreneaux = $1
+    `;
+    
+    const result = await db.query(sql, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Créneau non trouvé.'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur serveur:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📌 Route pour mettre à jour le statut d'un créneau
+router.put('/creneaux/:id/statut', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { statut } = req.body;
+    
+    if (!statut || !['disponible', 'réservé', 'occupé'].includes(statut)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Statut invalide. Utilisez: disponible, réservé, ou occupé.'
+      });
+    }
+    
+    const sql = `
+      UPDATE creneaux 
+      SET statut = $1 
+      WHERE idcreneaux = $2
+      RETURNING *
+    `;
+    
+    const result = await db.query(sql, [statut, id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Créneau non trouvé.'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Statut mis à jour avec succès.',
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur serveur:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+export default router;8
