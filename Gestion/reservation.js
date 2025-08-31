@@ -339,5 +339,90 @@ router.put('/:id/statut', async (req, res) => {
     });
   }
 });
+// Dans votre route API (/api/reservation/)
+router.get('/', async (req, res) => {
+    try {
+      const { nom, email, statut, date, clientId } = req.query;
+      
+      let sql = `
+        SELECT 
+          id,
+          TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
+          heurereservation,
+          statut,
+          idclient,
+          numeroterrain,
+          nomclient,
+          prenom,
+          email,
+          telephone,
+          typeTerrain,
+          tarif,
+          surface,
+          heurefin,
+          nomterrain
+        FROM reservation 
+        WHERE 1=1
+      `;
+      
+      const params = [];
+      let paramCount = 0;
+      
+      // Sécurité: si clientId est fourni, on filtre uniquement par ce client
+      if (clientId) {
+        paramCount++;
+        sql += ` AND idclient = $${paramCount}`;
+        params.push(clientId);
+      } else {
+        // Pour l'admin, on peut permettre d'autres filtres
+        if (nom) {
+          paramCount++;
+          sql += ` AND nomclient ILIKE $${paramCount}`;
+          params.push(`%${nom}%`);
+        }
+        
+        if (email) {
+          paramCount++;
+          sql += ` AND email ILIKE $${paramCount}`;
+          params.push(`%${email}%`);
+        }
+      }
+      
+      if (statut) {
+        paramCount++;
+        sql += ` AND statut = $${paramCount}`;
+        params.push(statut);
+      }
+      
+      if (date) {
+        paramCount++;
+        sql += ` AND datereservation = $${paramCount}`;
+        params.push(date);
+      }
+      
+      sql += ` ORDER BY datereservation DESC, heurereservation DESC`;
+      
+      console.log('📋 Requête SQL:', sql);
+      console.log('📦 Paramètres:', params);
+      
+      const result = await db.query(sql, params);
+      
+      console.log('📊 Réservations trouvées:', result.rows.length);
+      
+      res.json({
+        success: true,
+        count: result.rows.length,
+        data: result.rows
+      });
+  
+    } catch (error) {
+      console.error('❌ Erreur serveur:', error);
+      res.status(500).json({ 
+        success: false,
+        message: 'Erreur interne du serveur',
+        error: error.message 
+      });
+    }
+  });
 
 export default router;
