@@ -3,20 +3,20 @@ import db from '../db.js';
 
 const router = express.Router();
 
-// 📌 UTILITAIRE POUR FORMATER LES DATES
-const formatDateForClient = (date) => {
-  if (!date) return null;
-  return new Date(date).toISOString().split('T')[0]; // Format YYYY-MM-DD
-};
+// Middleware pour logger les requêtes
+router.use((req, res, next) => {
+  console.log(`📥 ${req.method} ${req.path}`, req.body || '');
+  next();
+});
 
-// 📌 Route pour récupérer toutes les réservations (avec ou sans filtres)
+// 📌 Route pour récupérer toutes les réservations avec filtres
 router.get('/', async (req, res) => {
   try {
-    const { nom, email, statut, date, clientId } = req.query;
+    const { search, statut } = req.query;
     
     let sql = `
       SELECT 
-        id, -- ✅ OBLIGATOIRE POUR REACT KEYS
+        id,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
@@ -37,57 +37,42 @@ router.get('/', async (req, res) => {
     
     const params = [];
     let paramCount = 0;
-    
-    // Filtres
-    if (clientId) {
+
+    // Filtre par recherche
+    if (search) {
       paramCount++;
-      sql += ` AND idclient = $${paramCount}`;
-      params.push(clientId);
-    } else {
-      if (nom) {
-        paramCount++;
-        sql += ` AND nomclient ILIKE $${paramCount}`;
-        params.push(`%${nom}%`);
-      }
-      if (email) {
-        paramCount++;
-        sql += ` AND email ILIKE $${paramCount}`;
-        params.push(`%${email}%`);
-      }
+      sql += ` AND (
+        nomclient ILIKE $${paramCount} OR 
+        email ILIKE $${paramCount} OR 
+        nomterrain ILIKE $${paramCount}
+      )`;
+      params.push(`%${search}%`);
     }
-    
+
+    // Filtre par statut
     if (statut) {
       paramCount++;
       sql += ` AND statut = $${paramCount}`;
       params.push(statut);
     }
-    
-    if (date) {
-      paramCount++;
-      sql += ` AND datereservation = $${paramCount}`;
-      params.push(date);
-    }
-    
+
     sql += ` ORDER BY datereservation DESC, heurereservation DESC`;
     
-    console.log('📋 [GET /] Requête SQL:', sql);
-    console.log('📦 [GET /] Paramètres:', params);
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', params);
     
     const result = await db.query(sql, params);
     
-    console.log('📊 [GET /] Réservations trouvées:', result.rows.length);
+    console.log('📊 Réservations trouvées:', result.rows.length);
     
     res.json({
       success: true,
       count: result.rows.length,
-      data: result.rows.map(row => ({
-        ...row,
-        datereservation: formatDateForClient(row.datereservation) // Format cohérent
-      }))
+      data: result.rows
     });
 
   } catch (error) {
-    console.error('❌ [GET /] Erreur serveur:', error);
+    console.error('❌ Erreur serveur:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur interne du serveur',
@@ -96,18 +81,11 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 📌 Route pour récupérer UNE réservation par ID
+// 📌 Route pour récupérer une réservation spécifique par ID
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    if (!id || isNaN(id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'ID invalide.'
-      });
-    }
-
     const sql = `
       SELECT 
         id,
@@ -129,8 +107,8 @@ router.get('/:id', async (req, res) => {
       WHERE id = $1
     `;
     
-    console.log('📋 [GET /:id] Requête SQL:', sql);
-    console.log('📦 [GET /:id] Paramètre ID:', id);
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètre ID:', id);
     
     const result = await db.query(sql, [id]);
     
@@ -141,20 +119,15 @@ router.get('/:id', async (req, res) => {
       });
     }
 
-    const reservation = {
-      ...result.rows[0],
-      datereservation: formatDateForClient(result.rows[0].datereservation)
-    };
-    
-    console.log('✅ [GET /:id] Réservation trouvée:', reservation);
+    console.log('✅ Réservation trouvée:', result.rows[0]);
     
     res.json({
       success: true,
-      data: reservation
+      data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ [GET /:id] Erreur serveur:', error);
+    console.error('❌ Erreur serveur:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur interne du serveur',
@@ -163,7 +136,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour créer une réservation
+// 📌 Route pour créer une nouvelle réservation
 router.post('/', async (req, res) => {
   try {
     const {
@@ -176,18 +149,21 @@ router.post('/', async (req, res) => {
       prenom,
       email,
       telephone,
-      typeTerrain = '',
-      tarif = 0,
-      surface = '',
+      typeTerrain,
+      tarif,
+      surface,
       heurefin,
-      nomterrain = ''
+      nomterrain
     } = req.body;
 
-    // Validation
-    if (!datereservation || !heurereservation || !idclient || !numeroterrain || !heurefin) {
+    // Validation des champs requis
+    const requiredFields = ['datereservation', 'heurereservation', 'idclient', 'numeroterrain'];
+    const missingFields = requiredFields.filter(field => !req.body[field]);
+    
+    if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Champs obligatoires manquants: date, heure début, heure fin, idclient, numeroterrain.'
+        message: `Champs requis manquants: ${missingFields.join(', ')}`
       });
     }
 
@@ -196,22 +172,7 @@ router.post('/', async (req, res) => {
         datereservation, heurereservation, statut, idclient, numeroterrain,
         nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      RETURNING 
-        id,
-        TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
-        heurereservation,
-        statut,
-        idclient,
-        numeroterrain,
-        nomclient,
-        prenom,
-        email,
-        telephone,
-        typeTerrain,
-        tarif,
-        surface,
-        heurefin,
-        nomterrain
+      RETURNING *
     `;
 
     const params = [
@@ -219,30 +180,30 @@ router.post('/', async (req, res) => {
       nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain
     ];
 
-    console.log('📋 [POST /] Requête SQL:', sql);
-    console.log('📦 [POST /] Paramètres:', params);
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', params);
 
     const result = await db.query(sql, params);
     
-    if (result.rows.length === 0) {
-      throw new Error('Échec de la création');
-    }
-    
-    const newReservation = {
-      ...result.rows[0],
-      datereservation: formatDateForClient(result.rows[0].datereservation)
-    };
-    
-    console.log('✅ [POST /] Réservation créée:', newReservation);
+    console.log('✅ Réservation créée:', result.rows[0]);
     
     res.status(201).json({
       success: true,
       message: 'Réservation créée avec succès.',
-      data: newReservation
+      data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ [POST /] Erreur création:', error);
+    console.error('❌ Erreur création réservation:', error);
+    
+    // Gestion des erreurs de contrainte unique
+    if (error.code === '23505') {
+      return res.status(400).json({
+        success: false,
+        message: 'Une réservation existe déjà pour ce créneau horaire'
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -272,47 +233,36 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
-    if (!id || isNaN(id)) {
-      return res.status(400).json({
+    // Vérifier que la réservation existe
+    const checkSql = 'SELECT id FROM reservation WHERE id = $1';
+    const checkResult = await db.query(checkSql, [id]);
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({
         success: false,
-        message: 'ID de réservation invalide.'
+        message: 'Réservation non trouvée.'
       });
     }
 
     const sql = `
       UPDATE reservation 
       SET 
-        datereservation = $1,
-        heurereservation = $2,
-        statut = $3,
-        idclient = $4,
-        numeroterrain = $5,
-        nomclient = $6,
-        prenom = $7,
-        email = $8,
-        telephone = $9,
-        typeTerrain = $10,
-        tarif = $11,
-        surface = $12,
-        heurefin = $13,
-        nomterrain = $14
+        datereservation = COALESCE($1, datereservation),
+        heurereservation = COALESCE($2, heurereservation),
+        statut = COALESCE($3, statut),
+        idclient = COALESCE($4, idclient),
+        numeroterrain = COALESCE($5, numeroterrain),
+        nomclient = COALESCE($6, nomclient),
+        prenom = COALESCE($7, prenom),
+        email = COALESCE($8, email),
+        telephone = COALESCE($9, telephone),
+        typeTerrain = COALESCE($10, typeTerrain),
+        tarif = COALESCE($11, tarif),
+        surface = COALESCE($12, surface),
+        heurefin = COALESCE($13, heurefin),
+        nomterrain = COALESCE($14, nomterrain)
       WHERE id = $15
-      RETURNING 
-        id,
-        TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
-        heurereservation,
-        statut,
-        idclient,
-        numeroterrain,
-        nomclient,
-        prenom,
-        email,
-        telephone,
-        typeTerrain,
-        tarif,
-        surface,
-        heurefin,
-        nomterrain
+      RETURNING *
     `;
 
     const params = [
@@ -320,33 +270,21 @@ router.put('/:id', async (req, res) => {
       nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain, id
     ];
 
-    console.log('📋 [PUT /:id] Requête SQL:', sql);
-    console.log('📦 [PUT /:id] Paramètres:', params);
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', params);
 
     const result = await db.query(sql, params);
     
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée ou non mise à jour.'
-      });
-    }
-    
-    const updatedReservation = {
-      ...result.rows[0],
-      datereservation: formatDateForClient(result.rows[0].datereservation)
-    };
-    
-    console.log('✅ [PUT /:id] Réservation mise à jour:', updatedReservation);
+    console.log('✅ Réservation mise à jour:', result.rows[0]);
     
     res.json({
       success: true,
       message: 'Réservation mise à jour avec succès.',
-      data: updatedReservation
+      data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ [PUT /:id] Erreur mise à jour:', error);
+    console.error('❌ Erreur mise à jour réservation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -360,37 +298,34 @@ router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    if (!id || isNaN(id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'ID de réservation invalide.'
-      });
-    }
+    // Vérifier que la réservation existe
+    const checkSql = 'SELECT id FROM reservation WHERE id = $1';
+    const checkResult = await db.query(checkSql, [id]);
     
-    const sql = 'DELETE FROM reservation WHERE id = $1 RETURNING id';
-    
-    console.log('📋 [DELETE /:id] Requête SQL:', sql);
-    console.log('📦 [DELETE /:id] Paramètre ID:', id);
-    
-    const result = await db.query(sql, [id]);
-    
-    if (result.rows.length === 0) {
+    if (checkResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
     
-    console.log('✅ [DELETE /:id] Réservation supprimée. ID:', result.rows[0].id);
+    const sql = 'DELETE FROM reservation WHERE id = $1 RETURNING *';
+    
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètre ID:', id);
+    
+    const result = await db.query(sql, [id]);
+    
+    console.log('✅ Réservation supprimée:', result.rows[0]);
     
     res.json({
       success: true,
       message: 'Réservation supprimée avec succès.',
-      data: { id: result.rows[0].id }
+      data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ [DELETE /:id] Erreur suppression:', error);
+    console.error('❌ Erreur suppression réservation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -399,23 +334,27 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour UNIQUEMENT le statut
+// 📌 Route pour mettre à jour le statut d'une réservation
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
     const { statut } = req.body;
     
-    if (!id || isNaN(id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'ID de réservation invalide.'
-      });
-    }
-    
     if (!statut || !['confirmée', 'annulée', 'en attente', 'terminée'].includes(statut)) {
       return res.status(400).json({
         success: false,
-        message: 'Statut invalide. Valeurs autorisées: confirmée, annulée, en attente, terminée.'
+        message: 'Statut invalide. Utilisez: confirmée, annulée, en attente, ou terminée.'
+      });
+    }
+    
+    // Vérifier que la réservation existe
+    const checkSql = 'SELECT id FROM reservation WHERE id = $1';
+    const checkResult = await db.query(checkSql, [id]);
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Réservation non trouvée.'
       });
     }
     
@@ -423,51 +362,24 @@ router.put('/:id/statut', async (req, res) => {
       UPDATE reservation 
       SET statut = $1 
       WHERE id = $2
-      RETURNING 
-        id,
-        TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
-        heurereservation,
-        statut,
-        idclient,
-        numeroterrain,
-        nomclient,
-        prenom,
-        email,
-        telephone,
-        typeTerrain,
-        tarif,
-        surface,
-        heurefin,
-        nomterrain
+      RETURNING *
     `;
     
-    console.log('📋 [PUT /:id/statut] Requête SQL:', sql);
-    console.log('📦 [PUT /:id/statut] Paramètres:', [statut, id]);
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', [statut, id]);
     
     const result = await db.query(sql, [statut, id]);
     
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée.'
-      });
-    }
-
-    const updatedReservation = {
-      ...result.rows[0],
-      datereservation: formatDateForClient(result.rows[0].datereservation)
-    };
-    
-    console.log('✅ [PUT /:id/statut] Statut mis à jour:', updatedReservation);
+    console.log('✅ Statut réservation mis à jour:', result.rows[0]);
     
     res.json({
       success: true,
       message: 'Statut de la réservation mis à jour avec succès.',
-      data: updatedReservation
+      data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ [PUT /:id/statut] Erreur serveur:', error);
+    console.error('❌ Erreur serveur:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur interne du serveur',
