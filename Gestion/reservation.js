@@ -3,20 +3,11 @@ import db from '../db.js';
 
 const router = express.Router();
 
-// Middleware pour logger les requêtes
-router.use((req, res, next) => {
-  console.log(`📥 ${req.method} ${req.path}`, req.body || '');
-  next();
-});
-
-// 📌 Route pour récupérer toutes les réservations avec filtres
+// 📌 Route pour récupérer toutes les réservations
 router.get('/', async (req, res) => {
   try {
-    const { search, statut } = req.query;
-    
-    let sql = `
+    const sql = `
       SELECT 
-        numeroreservation,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
@@ -26,45 +17,31 @@ router.get('/', async (req, res) => {
         prenom,
         email,
         telephone,
-        typeterrain,
+        typeTerrain,
         tarif,
         surface,
         heurefin,
         nomterrain
       FROM reservation 
-      WHERE 1=1
+      ORDER BY datereservation, heurereservation
     `;
     
-    const params = [];
-    let paramCount = 0;
-
-    // Filtre par recherche
-    if (search) {
-      paramCount++;
-      sql += ` AND (
-        nomclient ILIKE $${paramCount} OR 
-        email ILIKE $${paramCount} OR 
-        nomterrain ILIKE $${paramCount}
-      )`;
-      params.push(`%${search}%`);
-    }
-
-    // Filtre par statut
-    if (statut) {
-      paramCount++;
-      sql += ` AND statut = $${paramCount}`;
-      params.push(statut);
-    }
-
-    sql += ` ORDER BY datereservation DESC, heurereservation DESC`;
-    
     console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètres:', params);
     
-    const result = await db.query(sql, params);
+    const result = await db.query(sql);
     
     console.log('📊 Réservations trouvées:', result.rows.length);
+    if (result.rows.length > 0) {
+      console.log('📝 Première réservation:', result.rows[0]);
+    }
     
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Aucune réservation trouvée.'
+      });
+    }
+
     res.json({
       success: true,
       count: result.rows.length,
@@ -88,7 +65,6 @@ router.get('/:id', async (req, res) => {
     
     const sql = `
       SELECT 
-        numeroreservation,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
@@ -98,13 +74,13 @@ router.get('/:id', async (req, res) => {
         prenom,
         email,
         telephone,
-        typeterrain,
+        typeTerrain,
         tarif,
         surface,
         heurefin,
         nomterrain
       FROM reservation 
-      WHERE numeroreservation = $1
+      WHERE id = $1
     `;
     
     console.log('📋 Requête SQL:', sql);
@@ -142,14 +118,14 @@ router.post('/', async (req, res) => {
     const {
       datereservation,
       heurereservation,
-      statut = 'en attente',
+      statut,
       idclient,
       numeroterrain,
       nomclient,
       prenom,
       email,
       telephone,
-      typeterrain,
+      typeTerrain,
       tarif,
       surface,
       heurefin,
@@ -157,27 +133,24 @@ router.post('/', async (req, res) => {
     } = req.body;
 
     // Validation des champs requis
-    const requiredFields = ['datereservation', 'heurereservation', 'idclient', 'numeroterrain'];
-    const missingFields = requiredFields.filter(field => !req.body[field]);
-    
-    if (missingFields.length > 0) {
+    if (!datereservation || !heurereservation || !statut || !idclient || !numeroterrain) {
       return res.status(400).json({
         success: false,
-        message: `Champs requis manquants: ${missingFields.join(', ')}`
+        message: 'Champs requis manquants: date, heure, statut, idclient et numeroterrain sont obligatoires.'
       });
     }
 
     const sql = `
       INSERT INTO reservation (
         datereservation, heurereservation, statut, idclient, numeroterrain,
-        nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
+        nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `;
 
     const params = [
       datereservation, heurereservation, statut, idclient, numeroterrain,
-      nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
+      nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain
     ];
 
     console.log('📋 Requête SQL:', sql);
@@ -195,15 +168,6 @@ router.post('/', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Erreur création réservation:', error);
-    
-    // Gestion des erreurs de contrainte unique
-    if (error.code === '23505') {
-      return res.status(400).json({
-        success: false,
-        message: 'Une réservation existe déjà pour ce créneau horaire'
-      });
-    }
-    
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -226,54 +190,50 @@ router.put('/:id', async (req, res) => {
       prenom,
       email,
       telephone,
-      typeterrain,
+      typeTerrain,
       tarif,
       surface,
       heurefin,
       nomterrain
     } = req.body;
 
-    // Vérifier que la réservation existe
-    const checkSql = 'SELECT numeroreservation FROM reservation WHERE numeroreservation = $1';
-    const checkResult = await db.query(checkSql, [id]);
-    
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée.'
-      });
-    }
-
     const sql = `
       UPDATE reservation 
       SET 
-        datereservation = COALESCE($1, datereservation),
-        heurereservation = COALESCE($2, heurereservation),
-        statut = COALESCE($3, statut),
-        idclient = COALESCE($4, idclient),
-        numeroterrain = COALESCE($5, numeroterrain),
-        nomclient = COALESCE($6, nomclient),
-        prenom = COALESCE($7, prenom),
-        email = COALESCE($8, email),
-        telephone = COALESCE($9, telephone),
-        typeterrain = COALESCE($10, typeterrain),
-        tarif = COALESCE($11, tarif),
-        surface = COALESCE($12, surface),
-        heurefin = COALESCE($13, heurefin),
-        nomterrain = COALESCE($14, nomterrain)
-      WHERE numeroreservation = $15
+        datereservation = $1,
+        heurereservation = $2,
+        statut = $3,
+        idclient = $4,
+        numeroterrain = $5,
+        nomclient = $6,
+        prenom = $7,
+        email = $8,
+        telephone = $9,
+        typeTerrain = $10,
+        tarif = $11,
+        surface = $12,
+        heurefin = $13,
+        nomterrain = $14
+      WHERE id = $15
       RETURNING *
     `;
 
     const params = [
       datereservation, heurereservation, statut, idclient, numeroterrain,
-      nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain, id
+      nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain, id
     ];
 
     console.log('📋 Requête SQL:', sql);
     console.log('📦 Paramètres:', params);
 
     const result = await db.query(sql, params);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Réservation non trouvée.'
+      });
+    }
     
     console.log('✅ Réservation mise à jour:', result.rows[0]);
     
@@ -298,23 +258,19 @@ router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Vérifier que la réservation existe
-    const checkSql = 'SELECT numeroreservation FROM reservation WHERE numeroreservation = $1';
-    const checkResult = await db.query(checkSql, [id]);
-    
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée.'
-      });
-    }
-    
-    const sql = 'DELETE FROM reservation WHERE numeroreservation = $1 RETURNING *';
+    const sql = 'DELETE FROM reservation WHERE id = $1 RETURNING *';
     
     console.log('📋 Requête SQL:', sql);
     console.log('📦 Paramètre ID:', id);
     
     const result = await db.query(sql, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Réservation non trouvée.'
+      });
+    }
     
     console.log('✅ Réservation supprimée:', result.rows[0]);
     
@@ -347,21 +303,10 @@ router.put('/:id/statut', async (req, res) => {
       });
     }
     
-    // Vérifier que la réservation existe
-    const checkSql = 'SELECT numeroreservation FROM reservation WHERE numeroreservation = $1';
-    const checkResult = await db.query(checkSql, [id]);
-    
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée.'
-      });
-    }
-    
     const sql = `
       UPDATE reservation 
       SET statut = $1 
-      WHERE numeroreservation = $2
+      WHERE id = $2
       RETURNING *
     `;
     
@@ -370,6 +315,13 @@ router.put('/:id/statut', async (req, res) => {
     
     const result = await db.query(sql, [statut, id]);
     
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Réservation non trouvée.'
+      });
+    }
+
     console.log('✅ Statut réservation mis à jour:', result.rows[0]);
     
     res.json({
@@ -387,5 +339,90 @@ router.put('/:id/statut', async (req, res) => {
     });
   }
 });
+// Dans votre route API (/api/reservation/)
+router.get('/', async (req, res) => {
+    try {
+      const { nom, email, statut, date, clientId } = req.query;
+      
+      let sql = `
+        SELECT 
+          id,
+          TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
+          heurereservation,
+          statut,
+          idclient,
+          numeroterrain,
+          nomclient,
+          prenom,
+          email,
+          telephone,
+          typeTerrain,
+          tarif,
+          surface,
+          heurefin,
+          nomterrain
+        FROM reservation 
+        WHERE 1=1
+      `;
+      
+      const params = [];
+      let paramCount = 0;
+      
+      // Sécurité: si clientId est fourni, on filtre uniquement par ce client
+      if (clientId) {
+        paramCount++;
+        sql += ` AND idclient = $${paramCount}`;
+        params.push(clientId);
+      } else {
+        // Pour l'admin, on peut permettre d'autres filtres
+        if (nom) {
+          paramCount++;
+          sql += ` AND nomclient ILIKE $${paramCount}`;
+          params.push(`%${nom}%`);
+        }
+        
+        if (email) {
+          paramCount++;
+          sql += ` AND email ILIKE $${paramCount}`;
+          params.push(`%${email}%`);
+        }
+      }
+      
+      if (statut) {
+        paramCount++;
+        sql += ` AND statut = $${paramCount}`;
+        params.push(statut);
+      }
+      
+      if (date) {
+        paramCount++;
+        sql += ` AND datereservation = $${paramCount}`;
+        params.push(date);
+      }
+      
+      sql += ` ORDER BY datereservation DESC, heurereservation DESC`;
+      
+      console.log('📋 Requête SQL:', sql);
+      console.log('📦 Paramètres:', params);
+      
+      const result = await db.query(sql, params);
+      
+      console.log('📊 Réservations trouvées:', result.rows.length);
+      
+      res.json({
+        success: true,
+        count: result.rows.length,
+        data: result.rows
+      });
+  
+    } catch (error) {
+      console.error('❌ Erreur serveur:', error);
+      res.status(500).json({ 
+        success: false,
+        message: 'Erreur interne du serveur',
+        error: error.message 
+      });
+    }
+  });
 
 export default router;
