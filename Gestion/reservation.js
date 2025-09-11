@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
     
     let sql = `
       SELECT 
-        id,
+        numeroreservation,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
         prenom,
         email,
         telephone,
-        typeTerrain,
+        typeterrain,
         tarif,
         surface,
         heurefin,
@@ -88,7 +88,7 @@ router.get('/:id', async (req, res) => {
     
     const sql = `
       SELECT 
-        id,
+        numeroreservation,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
@@ -98,13 +98,13 @@ router.get('/:id', async (req, res) => {
         prenom,
         email,
         telephone,
-        typeTerrain,
+        typeterrain,
         tarif,
         surface,
         heurefin,
         nomterrain
       FROM reservation 
-      WHERE id = $1
+      WHERE numeroreservation = $1
     `;
     
     console.log('📋 Requête SQL:', sql);
@@ -149,7 +149,7 @@ router.post('/', async (req, res) => {
       prenom,
       email,
       telephone,
-      typeTerrain,
+      typeterrain,
       tarif,
       surface,
       heurefin,
@@ -170,14 +170,14 @@ router.post('/', async (req, res) => {
     const sql = `
       INSERT INTO reservation (
         datereservation, heurereservation, statut, idclient, numeroterrain,
-        nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain
+        nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `;
 
     const params = [
       datereservation, heurereservation, statut, idclient, numeroterrain,
-      nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain
+      nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
     ];
 
     console.log('📋 Requête SQL:', sql);
@@ -226,7 +226,7 @@ router.put('/:id', async (req, res) => {
       prenom,
       email,
       telephone,
-      typeTerrain,
+      typeterrain,
       tarif,
       surface,
       heurefin,
@@ -234,7 +234,7 @@ router.put('/:id', async (req, res) => {
     } = req.body;
 
     // Vérifier que la réservation existe
-    const checkSql = 'SELECT id FROM reservation WHERE id = $1';
+    const checkSql = 'SELECT numeroreservation FROM reservation WHERE numeroreservation = $1';
     const checkResult = await db.query(checkSql, [id]);
     
     if (checkResult.rows.length === 0) {
@@ -256,18 +256,18 @@ router.put('/:id', async (req, res) => {
         prenom = COALESCE($7, prenom),
         email = COALESCE($8, email),
         telephone = COALESCE($9, telephone),
-        typeTerrain = COALESCE($10, typeTerrain),
+        typeterrain = COALESCE($10, typeterrain),
         tarif = COALESCE($11, tarif),
         surface = COALESCE($12, surface),
         heurefin = COALESCE($13, heurefin),
         nomterrain = COALESCE($14, nomterrain)
-      WHERE id = $15
+      WHERE numeroreservation = $15
       RETURNING *
     `;
 
     const params = [
       datereservation, heurereservation, statut, idclient, numeroterrain,
-      nomclient, prenom, email, telephone, typeTerrain, tarif, surface, heurefin, nomterrain, id
+      nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain, id
     ];
 
     console.log('📋 Requête SQL:', sql);
@@ -299,7 +299,7 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     
     // Vérifier que la réservation existe
-    const checkSql = 'SELECT id FROM reservation WHERE id = $1';
+    const checkSql = 'SELECT numeroreservation FROM reservation WHERE numeroreservation = $1';
     const checkResult = await db.query(checkSql, [id]);
     
     if (checkResult.rows.length === 0) {
@@ -309,7 +309,7 @@ router.delete('/:id', async (req, res) => {
       });
     }
     
-    const sql = 'DELETE FROM reservation WHERE id = $1 RETURNING *';
+    const sql = 'DELETE FROM reservation WHERE numeroreservation = $1 RETURNING *';
     
     console.log('📋 Requête SQL:', sql);
     console.log('📦 Paramètre ID:', id);
@@ -348,7 +348,7 @@ router.put('/:id/statut', async (req, res) => {
     }
     
     // Vérifier que la réservation existe
-    const checkSql = 'SELECT id FROM reservation WHERE id = $1';
+    const checkSql = 'SELECT numeroreservation FROM reservation WHERE numeroreservation = $1';
     const checkResult = await db.query(checkSql, [id]);
     
     if (checkResult.rows.length === 0) {
@@ -361,7 +361,7 @@ router.put('/:id/statut', async (req, res) => {
     const sql = `
       UPDATE reservation 
       SET statut = $1 
-      WHERE id = $2
+      WHERE numeroreservation = $2
       RETURNING *
     `;
     
