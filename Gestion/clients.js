@@ -1,3 +1,4 @@
+// routes/clients.js
 import express from "express";
 import pool from "../db.js";
 
@@ -9,8 +10,7 @@ router.post("/", async (req, res) => {
         nom,
         prenom,
         email,
-        telephone,
-        statut = 'actif' // Valeur par défaut
+        telephone
     } = req.body;
 
     // Validation des champs requis
@@ -30,27 +30,17 @@ router.post("/", async (req, res) => {
         });
     }
 
-    // Validation du statut
-    const statutsValides = ['actif', 'inactif', 'en attente'];
-    if (statut && !statutsValides.includes(statut)) {
-        return res.status(400).json({
-            success: false,
-            message: "Statut invalide. Les valeurs autorisées sont: actif, inactif, en attente"
-        });
-    }
-
     try {
         const result = await pool.query(
             `INSERT INTO clients 
-             (nom, prenom, email, telephone, statut) 
-             VALUES ($1, $2, $3, $4, $5) 
+             (nom, prenom, email, telephone) 
+             VALUES ($1, $2, $3, $4) 
              RETURNING *`,
             [
                 nom,
                 prenom,
                 email,
-                telephone,
-                statut
+                telephone
             ]
         );
 
@@ -93,39 +83,6 @@ router.get("/", async (req, res) => {
         });
     } catch (err) {
         console.error("❌ Erreur lors de la récupération des clients:", err.message);
-        res.status(500).json({
-            success: false,
-            message: "Erreur serveur lors de la récupération des clients",
-            error: err.message
-        });
-    }
-});
-
-// READ - Récupérer les clients par statut
-router.get("/statut/:statut", async (req, res) => {
-    const statut = req.params.statut;
-    const statutsValides = ['actif', 'inactif', 'en attente'];
-    
-    if (!statutsValides.includes(statut)) {
-        return res.status(400).json({
-            success: false,
-            message: "Statut invalide. Les valeurs autorisées sont: actif, inactif, en attente"
-        });
-    }
-
-    try {
-        const result = await pool.query(
-            "SELECT * FROM clients WHERE statut = $1 ORDER BY nom, prenom",
-            [statut]
-        );
-
-        res.json({
-            success: true,
-            count: result.rows.length,
-            data: result.rows
-        });
-    } catch (err) {
-        console.error("❌ Erreur lors de la récupération des clients par statut:", err.message);
         res.status(500).json({
             success: false,
             message: "Erreur serveur lors de la récupération des clients",
@@ -203,8 +160,7 @@ router.put("/:id", async (req, res) => {
         nom,
         prenom,
         email,
-        telephone,
-        statut
+        telephone
     } = req.body;
 
     // Validation des champs requis
@@ -224,27 +180,17 @@ router.put("/:id", async (req, res) => {
         });
     }
 
-    // Validation du statut
-    const statutsValides = ['actif', 'inactif', 'en attente'];
-    if (statut && !statutsValides.includes(statut)) {
-        return res.status(400).json({
-            success: false,
-            message: "Statut invalide. Les valeurs autorisées sont: actif, inactif, en attente"
-        });
-    }
-
     try {
         const result = await pool.query(
             `UPDATE clients 
-             SET nom = $1, prenom = $2, email = $3, telephone = $4, statut = $5
-             WHERE idclient = $6 
+             SET nom = $1, prenom = $2, email = $3, telephone = $4
+             WHERE idclient = $5 
              RETURNING *`,
             [
                 nom,
                 prenom,
                 email,
                 telephone,
-                statut,
                 id
             ]
         );
@@ -276,53 +222,6 @@ router.put("/:id", async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Erreur serveur lors de la modification du client",
-            error: err.message
-        });
-    }
-});
-
-// UPDATE - Modifier uniquement le statut d'un client
-router.patch("/:id/statut", async (req, res) => {
-    const id = req.params.id;
-    const { statut } = req.body;
-
-    // Validation du statut
-    const statutsValides = ['actif', 'inactif', 'en attente'];
-    if (!statut || !statutsValides.includes(statut)) {
-        return res.status(400).json({
-            success: false,
-            message: "Statut invalide ou manquant. Les valeurs autorisées sont: actif, inactif, en attente"
-        });
-    }
-
-    try {
-        const result = await pool.query(
-            `UPDATE clients 
-             SET statut = $1
-             WHERE idclient = $2 
-             RETURNING *`,
-            [statut, id]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "Client non trouvé"
-            });
-        }
-
-        console.log("✅ Statut client modifié:", result.rows[0]);
-        
-        res.json({
-            success: true,
-            message: "Statut client modifié avec succès",
-            data: result.rows[0]
-        });
-    } catch (err) {
-        console.error("❌ Erreur lors de la modification du statut:", err.message);
-        res.status(500).json({
-            success: false,
-            message: "Erreur serveur lors de la modification du statut",
             error: err.message
         });
     }
@@ -370,14 +269,14 @@ router.delete("/:id", async (req, res) => {
     }
 });
 
-// SEARCH - Rechercher des clients par nom, prénom, email ou statut
+// SEARCH - Rechercher des clients par nom ou prénom
 router.get("/recherche/:term", async (req, res) => {
     const term = req.params.term;
     
     try {
         const result = await pool.query(
             `SELECT * FROM clients 
-             WHERE nom ILIKE $1 OR prenom ILIKE $1 OR email ILIKE $1 OR statut ILIKE $1
+             WHERE nom ILIKE $1 OR prenom ILIKE $1 OR email ILIKE $1
              ORDER BY nom, prenom`,
             [`%${term}%`]
         );
