@@ -9,6 +9,9 @@ import Reservation from './Gestion/reservation.js'; // Correction du nom de fich
 import Contact from './Gestion/contact.js'; // Correction du nom de fichier
 import creneauxRoute from './Gestion/gestionCreneaux.js';
 import User from './Gestion/user.js';
+import Terrain from './Gestion/terrain.js';
+import Client from './Gestion/clients.js';
+import CalendriersRouter from './Gestion/calendrier.js';
 dotenv.config();
 const app = express();
 
@@ -36,10 +39,14 @@ app.get('/', (req, res) => {
 
 // Utilisation du routeur des créneaux
 app.use('/api/creneaux', creneauxRoutes);
+app.use('/api/clients', Client);
 app.use('/api/user', User);
+app.use('/api/terrain', Terrain);
 app.use('/api/reservation', Reservation);
 app.use('/api/contact', Contact);
 app.use('/api/gestioncreneaux', creneauxRoute);
+
+app.use('/api/calendriers', CalendriersRouter);
 // 🏥 Health check endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({
