@@ -8,38 +8,36 @@ const router = express.Router();
 router.post("/", async (req, res) => {
     const {
         nomterrain,
-        typeTerrain,
+        typeterrain,     // ✅ CORRIGÉ : minuscule, comme dans la BDD
         surface,
         descriptions,
         tarif,
         equipementdispo,
-        photo,
-        idclient
+        photo
     } = req.body;
 
     // Validation des champs requis
-    if (!nomterrain || !typeTerrain || !surface || !tarif) {
+    if (!nomterrain || !typeterrain || !surface || !tarif) {
         return res.status(400).json({
             success: false,
-            message: "Champs requis manquants: nomterrain, typeTerrain, surface et tarif sont obligatoires"
+            message: "Champs requis manquants: nomterrain, typeterrain, surface et tarif sont obligatoires"
         });
     }
 
     try {
         const result = await pool.query(
             `INSERT INTO terrains 
-             (nomterrain, typeTerrain, surface, descriptions, tarif, equipementdispo, photo, idclient) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+             (nomterrain, typeterrain, surface, descriptions, tarif, equipementdispo, photo) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) 
              RETURNING *`,
             [
                 nomterrain,
-                typeTerrain,
+                typeterrain,     // ✅ correspond à la colonne réelle
                 surface,
                 descriptions || null,
                 tarif,
                 equipementdispo || null,
-                photo || null,
-                idclient || null
+                photo || null
             ]
         );
 
@@ -119,39 +117,37 @@ router.put("/:id", async (req, res) => {
     const id = req.params.id;
     const {
         nomterrain,
-        typeTerrain,
+        typeterrain,     // ✅ CORRIGÉ : minuscule
         surface,
         descriptions,
         tarif,
         equipementdispo,
-        photo,
-        idclient
+        photo
     } = req.body;
 
     // Validation des champs requis
-    if (!nomterrain || !typeTerrain || !surface || !tarif) {
+    if (!nomterrain || !typeterrain || !surface || !tarif) {
         return res.status(400).json({
             success: false,
-            message: "Champs requis manquants: nomterrain, typeTerrain, surface et tarif sont obligatoires"
+            message: "Champs requis manquants: nomterrain, typeterrain, surface et tarif sont obligatoires"
         });
     }
 
     try {
         const result = await pool.query(
             `UPDATE terrains 
-             SET nomterrain = $1, typeTerrain = $2, surface = $3, descriptions = $4, 
-                 tarif = $5, equipementdispo = $6, photo = $7, idclient = $8
-             WHERE numeroterrain = $9 
+             SET nomterrain = $1, typeterrain = $2, surface = $3, descriptions = $4, 
+                 tarif = $5, equipementdispo = $6, photo = $7
+             WHERE numeroterrain = $8 
              RETURNING *`,
             [
                 nomterrain,
-                typeTerrain,
+                typeterrain,     // ✅ correspond à la colonne réelle
                 surface,
                 descriptions || null,
                 tarif,
                 equipementdispo || null,
                 photo || null,
-                idclient || null,
                 id
             ]
         );
