@@ -46,7 +46,7 @@ router.post("/", async (req, res) => {
         res.status(201).json({
             success: true,
             message: "Terrain créé avec succès",
-            data: result.rows[0]
+             result.rows[0]
         });
     } catch (err) {
         console.error("❌ Erreur lors de la création du terrain:", err.message);
@@ -164,7 +164,7 @@ router.put("/:id", async (req, res) => {
         res.json({
             success: true,
             message: "Terrain modifié avec succès",
-            data: result.rows[0]
+             result.rows[0]
         });
     } catch (err) {
         console.error("❌ Erreur lors de la modification du terrain:", err.message);
