@@ -8,7 +8,8 @@ const router = express.Router();
 router.post("/", async (req, res) => {
     const {
         date,
-        nomterrain
+        nomterrain,
+        statut  // ✅ Ajouté ici
     } = req.body;
 
     // Validation des champs requis
@@ -23,11 +24,12 @@ router.post("/", async (req, res) => {
         const result = await pool.query(
             `INSERT INTO calendriers 
              (date, nomterrain, statut) 
-             VALUES ($1, $2, NULL) 
+             VALUES ($1, $2, $3) 
              RETURNING *`,
             [
                 date,
-                nomterrain || null
+                nomterrain || null,
+                statut || 'disponible'  // ✅ Valeur par défaut si non fourni
             ]
         );
 
@@ -157,7 +159,8 @@ router.put("/:id", async (req, res) => {
     const id = req.params.id;
     const {
         date,
-        nomterrain
+        nomterrain,
+        statut  // ✅ Ajouté ici
     } = req.body;
 
     // Validation des champs requis
@@ -171,12 +174,13 @@ router.put("/:id", async (req, res) => {
     try {
         const result = await pool.query(
             `UPDATE calendriers 
-             SET date = $1, nomterrain = $2
-             WHERE id = $3 
+             SET date = $1, nomterrain = $2, statut = $3
+             WHERE id = $4 
              RETURNING *`,
             [
                 date,
                 nomterrain || null,
+                statut || 'disponible',  // ✅ Valeur par défaut si non fourni
                 id
             ]
         );
