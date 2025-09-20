@@ -22,8 +22,8 @@ router.post("/", async (req, res) => {
     try {
         const result = await pool.query(
             `INSERT INTO calendriers 
-             (date, nomterrain) 
-             VALUES ($1, $2) 
+             (date, nomterrain, statut) 
+             VALUES ($1, $2, NULL) 
              RETURNING *`,
             [
                 date,
