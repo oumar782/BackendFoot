@@ -1,14 +1,16 @@
 import nodemailer from 'nodemailer';
 import PDFDocument from 'pdfkit';
 
-// Configuration du transporteur email
-const transporter = nodemailer.createTransporter({
-  service: 'gmail', // ou votre service email (outlook, yahoo, etc.)
-  auth: {
-    user: process.env.EMAIL_USER, // Votre email
-    pass: process.env.EMAIL_PASS  // Votre mot de passe d'application
-  }
-});
+// Configuration du transporteur email - CORRECTION ICI
+const createTransporter = () => {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    }
+  });
+};
 
 // Fonction pour générer le PDF
 const generateReservationPDF = (reservation) => {
@@ -64,7 +66,22 @@ const generateReservationPDF = (reservation) => {
 
 // Fonction pour envoyer l'email avec PDF
 export const sendReservationConfirmation = async (reservation) => {
+  let transporter;
+  
   try {
+    // Vérifier que les variables d'environnement sont définies
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.error('❌ Variables d\'environnement email manquantes');
+      return { success: false, error: 'Configuration email manquante' };
+    }
+
+    // Créer le transporteur
+    transporter = createTransporter();
+    
+    // Vérifier la connexion
+    await transporter.verify();
+    console.log('✅ Serveur email prêt');
+
     // Générer le PDF
     const pdfBuffer = await generateReservationPDF(reservation);
     
@@ -166,7 +183,28 @@ export const sendReservationConfirmation = async (reservation) => {
   } catch (error) {
     console.error('❌ Erreur envoi email:', error);
     return { success: false, error: error.message };
+  } finally {
+    // Fermer le transporteur
+    if (transporter) {
+      transporter.close();
+    }
   }
 };
 
-export default transporter;
+// Version simplifiée pour les tests
+export const sendTestEmail = async (reservation) => {
+  try {
+    console.log('📧 Tentative d\'envoi d\'email à:', reservation.email);
+    console.log('🔧 Configuration email:', {
+      user: process.env.EMAIL_USER ? 'Défini' : 'Non défini',
+      pass: process.env.EMAIL_PASS ? 'Défini' : 'Non défini'
+    });
+    
+    // Simuler un envoi réussi pour les tests
+    return { success: true, messageId: 'test-' + Date.now(), test: true };
+    
+  } catch (error) {
+    console.error('❌ Erreur test email:', error);
+    return { success: false, error: error.message };
+  }
+};
