@@ -1,16 +1,8 @@
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import PDFDocument from 'pdfkit';
 
-// Configuration du transporteur email - CORRECTION ICI
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD
-    }
-  });
-};
+// Initialisation de Resend avec VOTRE VRAIE CLÉ API
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Fonction pour générer le PDF
 const generateReservationPDF = (reservation) => {
@@ -53,7 +45,6 @@ const generateReservationPDF = (reservation) => {
       doc.text('Merci pour votre réservation !');
       doc.text('Présentez cette confirmation à votre arrivée.');
       
-      // Pied de page
       doc.moveDown(2);
       doc.fontSize(10).text('Document généré automatiquement - ' + new Date().toLocaleDateString('fr-FR'), { align: 'center' });
       
@@ -64,81 +55,52 @@ const generateReservationPDF = (reservation) => {
   });
 };
 
-// Fonction pour envoyer l'email avec PDF
+// Fonction principale pour envoyer l'email
 export const sendReservationConfirmation = async (reservation) => {
-  let transporter;
-  
   try {
-    // Vérifier que les variables d'environnement sont définies
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.error('❌ Variables d\'environnement email manquantes');
-      return { success: false, error: 'Configuration email manquante' };
+    // Vérification de la clé API
+    if (!process.env.RESEND_API_KEY) {
+      console.error('❌ CLÉ RESEND MANQUANTE - Configurez RESEND_API_KEY dans Vercel');
+      return { 
+        success: false, 
+        error: 'Clé API Resend non configurée. Ajoutez RESEND_API_KEY dans les variables d\'environnement.' 
+      };
     }
 
-    // Créer le transporteur
-    transporter = createTransporter();
-    
-    // Vérifier la connexion
-    await transporter.verify();
-    console.log('✅ Serveur email prêt');
+    // Vérification de l'email du client
+    if (!reservation.email) {
+      console.error('❌ Email du client manquant');
+      return { success: false, error: 'Email du client manquant' };
+    }
+
+    console.log('🔑 Clé Resend configurée:', process.env.RESEND_API_KEY ? 'OUI' : 'NON');
+    console.log('📧 Envoi à:', reservation.email);
 
     // Générer le PDF
     const pdfBuffer = await generateReservationPDF(reservation);
     
-    // Préparer l'email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: reservation.email,
-      subject: `Confirmation de réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
+    // Envoyer avec Resend
+    const { data, error } = await resend.emails.send({
+      from: 'Confirmation Réservation <onboarding@resend.dev>',
+      to: [reservation.email],
+      subject: `✅ Confirmation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
       html: `
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
             <style>
-                body { 
-                    font-family: 'Arial', sans-serif; 
-                    line-height: 1.6;
-                    color: #333;
-                    max-width: 600px;
-                    margin: 0 auto;
-                    padding: 20px;
-                }
-                .header { 
-                    background: #4CAF50; 
-                    color: white; 
-                    padding: 30px; 
-                    text-align: center; 
-                    border-radius: 10px 10px 0 0;
-                }
-                .content { 
-                    padding: 30px; 
-                    background: #f9f9f9;
-                    border-radius: 0 0 10px 10px;
-                }
-                .details { 
-                    background: white; 
-                    padding: 20px; 
-                    border-radius: 5px; 
-                    border-left: 4px solid #4CAF50;
-                    margin: 20px 0;
-                }
-                .footer { 
-                    margin-top: 30px; 
-                    padding: 20px; 
-                    background: #f0f0f0; 
-                    text-align: center;
-                    border-radius: 5px;
-                    font-size: 14px;
-                }
-                h1 { margin: 0; }
-                h3 { color: #4CAF50; }
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: #4CAF50; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+                .content { padding: 30px; background: #f9f9f9; border-radius: 0 0 10px 10px; }
+                .details { background: white; padding: 20px; border-radius: 5px; border-left: 4px solid #4CAF50; margin: 20px 0; }
+                .footer { margin-top: 30px; padding: 20px; background: #f0f0f0; text-align: center; border-radius: 5px; font-size: 14px; }
                 .highlight { color: #4CAF50; font-weight: bold; }
             </style>
         </head>
         <body>
             <div class="header">
-                <h1>✅ Confirmation de Réservation</h1>
+                <h1>✅ Réservation Confirmée</h1>
             </div>
             <div class="content">
                 <p>Bonjour <span class="highlight">${reservation.prenom} ${reservation.nomclient}</span>,</p>
@@ -155,13 +117,10 @@ export const sendReservationConfirmation = async (reservation) => {
                 </div>
                 
                 <p>📎 Vous trouverez la confirmation officielle en PDF jointe à cet email.</p>
-                <p>🎯 <strong>Important :</strong> Présentez cette confirmation à votre arrivée au complexe.</p>
-                
-                <p>Pour toute question, n'hésitez pas à nous contacter.</p>
+                <p>🎯 <strong>Important :</strong> Présentez cette confirmation à votre arrivée.</p>
             </div>
             <div class="footer">
-                <p>Cordialement,<br><strong>L'équipe de gestion des terrains</strong></p>
-                <p>📞 Contact: [Votre numéro de téléphone]<br>📧 Email: [Votre email de contact]</p>
+                <p>Cordialement,<br><strong>Équipe Terrains de Football</strong></p>
             </div>
         </body>
         </html>
@@ -169,42 +128,21 @@ export const sendReservationConfirmation = async (reservation) => {
       attachments: [
         {
           filename: `confirmation-reservation-${reservation.id}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf'
+          content: pdfBuffer.toString('base64'),
         }
       ]
-    };
-    
-    // Envoyer l'email
-    const result = await transporter.sendMail(mailOptions);
-    console.log('✅ Email envoyé avec succès:', result.messageId);
-    return { success: true, messageId: result.messageId };
-    
-  } catch (error) {
-    console.error('❌ Erreur envoi email:', error);
-    return { success: false, error: error.message };
-  } finally {
-    // Fermer le transporteur
-    if (transporter) {
-      transporter.close();
-    }
-  }
-};
-
-// Version simplifiée pour les tests
-export const sendTestEmail = async (reservation) => {
-  try {
-    console.log('📧 Tentative d\'envoi d\'email à:', reservation.email);
-    console.log('🔧 Configuration email:', {
-      user: process.env.EMAIL_USER ? 'Défini' : 'Non défini',
-      pass: process.env.EMAIL_PASS ? 'Défini' : 'Non défini'
     });
-    
-    // Simuler un envoi réussi pour les tests
-    return { success: true, messageId: 'test-' + Date.now(), test: true };
+
+    if (error) {
+      console.error('❌ Erreur Resend:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log('✅ Email envoyé avec succès! ID:', data.id);
+    return { success: true, messageId: data.id };
     
   } catch (error) {
-    console.error('❌ Erreur test email:', error);
+    console.error('❌ Erreur critique:', error);
     return { success: false, error: error.message };
   }
 };

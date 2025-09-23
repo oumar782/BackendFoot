@@ -67,15 +67,7 @@ router.get('/', async (req, res) => {
 
     sql += ` ORDER BY datereservation DESC, heurereservation DESC`;
 
-    console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètres:', params);
-
     const result = await db.query(sql, params);
-
-    console.log('📊 Réservations trouvées:', result.rows.length);
-    if (result.rows.length > 0) {
-      console.log('📝 Première réservation:', result.rows[0]);
-    }
 
     res.json({
       success: true,
@@ -93,7 +85,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// 📌 Route pour récupérer une réservation spécifique par ID (numeroreservations)
+// 📌 Route pour récupérer une réservation spécifique par ID
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -119,9 +111,6 @@ router.get('/:id', async (req, res) => {
       WHERE numeroreservations = $1
     `;
 
-    console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètre ID:', id);
-
     const result = await db.query(sql, [id]);
 
     if (result.rows.length === 0) {
@@ -130,8 +119,6 @@ router.get('/:id', async (req, res) => {
         message: 'Réservation non trouvée.'
       });
     }
-
-    console.log('✅ Réservation trouvée:', result.rows[0]);
 
     res.json({
       success: true,
@@ -189,36 +176,35 @@ router.post('/', async (req, res) => {
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
     ];
 
-    console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètres:', params);
-
     const result = await db.query(sql, params);
-
-    console.log('✅ Réservation créée:', result.rows[0]);
 
     // Envoyer l'email seulement si le statut est "confirmée" dès la création
     let emailSent = false;
-    if (statut === 'confirmée') {
+    let emailError = null;
+    
+    if (statut === 'confirmée' && email) {
       try {
-        // Utiliser sendTestEmail pour éviter les erreurs pendant le développement
-        const emailResult = await sendTestEmail(result.rows[0]);
+        const emailResult = await sendReservationConfirmation(result.rows[0]);
         
         if (emailResult.success) {
-          console.log('✅ Email de confirmation envoyé avec succès');
           emailSent = true;
+          console.log('✅ Email de confirmation envoyé avec succès');
         } else {
-          console.error('❌ Erreur envoi email:', emailResult.error);
+          emailError = emailResult.error;
+          console.error('❌ Erreur envoi email:', emailError);
         }
       } catch (emailError) {
         console.error('❌ Erreur envoi email:', emailError);
+        emailError = emailError.message;
       }
     }
 
     res.status(201).json({
       success: true,
-      message: 'Réservation créée avec succès.',
+      message: 'Réservation créée avec succès.' + (emailSent ? ' Email de confirmation envoyé.' : ''),
       data: result.rows[0],
-      emailSent: emailSent
+      emailSent: emailSent,
+      emailError: emailError
     });
 
   } catch (error) {
@@ -278,9 +264,6 @@ router.put('/:id', async (req, res) => {
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain, id
     ];
 
-    console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètres:', params);
-
     const result = await db.query(sql, params);
 
     if (result.rows.length === 0) {
@@ -289,8 +272,6 @@ router.put('/:id', async (req, res) => {
         message: 'Réservation non trouvée.'
       });
     }
-
-    console.log('✅ Réservation mise à jour:', result.rows[0]);
 
     res.json({
       success: true,
@@ -315,9 +296,6 @@ router.delete('/:id', async (req, res) => {
 
     const sql = 'DELETE FROM reservation WHERE numeroreservations = $1 RETURNING numeroreservations as id, *';
 
-    console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètre ID:', id);
-
     const result = await db.query(sql, [id]);
 
     if (result.rows.length === 0) {
@@ -326,8 +304,6 @@ router.delete('/:id', async (req, res) => {
         message: 'Réservation non trouvée.'
       });
     }
-
-    console.log('✅ Réservation supprimée:', result.rows[0]);
 
     res.json({
       success: true,
@@ -345,7 +321,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour le statut d'une réservation (avec envoi d'email si confirmation)
+// 📌 Route pour mettre à jour le statut d'une réservation (AVEC RESEND)
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
@@ -365,9 +341,6 @@ router.put('/:id/statut', async (req, res) => {
       RETURNING numeroreservations as id, *
     `;
 
-    console.log('📋 Requête SQL:', sql);
-    console.log('📦 Paramètres:', [statut, id]);
-
     const result = await db.query(sql, [statut, id]);
 
     if (result.rows.length === 0) {
@@ -377,34 +350,39 @@ router.put('/:id/statut', async (req, res) => {
       });
     }
 
-    console.log('✅ Statut réservation mis à jour:', result.rows[0]);
+    const reservation = result.rows[0];
 
-    // Envoyer l'email seulement si le statut est "confirmée"
+    // ENVOYER L'EMAIL AVEC RESEND SI CONFIRMATION
     let emailSent = false;
-    if (statut === 'confirmée') {
+    let emailError = null;
+    
+    if (statut === 'confirmée' && reservation.email) {
       try {
-        console.log('🔄 Tentative d\'envoi d\'email pour la réservation:', id);
+        console.log(`📧 Envoi d'email de confirmation à: ${reservation.email}`);
         
-        // Utiliser sendTestEmail pour éviter les erreurs d'authentification pendant le développement
-        const emailResult = await sendTestEmail(result.rows[0]);
+        const emailResult = await sendReservationConfirmation(reservation);
         
         if (emailResult.success) {
-          console.log('✅ Email de confirmation envoyé avec succès');
           emailSent = true;
+          console.log('✅ Email envoyé avec succès via Resend');
         } else {
-          console.error('❌ Erreur envoi email:', emailResult.error);
+          emailError = emailResult.error;
+          console.error('❌ Erreur Resend:', emailError);
         }
-      } catch (emailError) {
-        console.error('❌ Erreur envoi email:', emailError);
-        // Ne pas bloquer la requête si l'email échoue
+      } catch (error) {
+        emailError = error.message;
+        console.error('❌ Erreur envoi email:', error);
       }
     }
 
     res.json({
       success: true,
-      message: 'Statut de la réservation mis à jour avec succès.',
-      data: result.rows[0],
-      emailSent: emailSent
+      message: 'Statut de la réservation mis à jour avec succès.' + 
+               (emailSent ? ' Email de confirmation envoyé.' : '') +
+               (emailError ? ` Erreur email: ${emailError}` : ''),
+      data: reservation,
+      emailSent: emailSent,
+      emailError: emailError
     });
 
   } catch (error) {
