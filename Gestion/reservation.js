@@ -1,6 +1,6 @@
 import express from 'express';
 import db from '../db.js';
-import { sendReservationConfirmation, sendTestEmail } from '../services/emailService.js';
+import { sendReservationConfirmation} from '../services/emailService.js';
 
 const router = express.Router();
 
