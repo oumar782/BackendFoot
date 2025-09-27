@@ -1,6 +1,6 @@
 import express from 'express';
 const router = express.Router();
-import db from '../../db.js';
+import db from '../db.js';
 
 // Route pour créer une nouvelle démonstration (CREATE)
 router.post('/', (req, res) => {
