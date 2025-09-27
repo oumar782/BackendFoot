@@ -23,7 +23,8 @@ app.use(
       "http://localhost:5173",
       "http://localhost:5174",
       "https://footspace-reserve.netlify.app",
-      "https://frabjous-gaufre-31e862.netlify.app"
+      "https://frabjous-gaufre-31e862.netlify.app",
+      "https://footspace-solutions.vercel.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
