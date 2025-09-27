@@ -12,6 +12,7 @@ import User from './Gestion/user.js';
 import Terrain from './Gestion/terrain.js';
 import Client from './Gestion/clients.js';
 import CalendriersRouter from './Gestion/calendrier.js';
+import demo from './Gestion/demonstration.js';
 dotenv.config();
 const app = express();
 
@@ -45,6 +46,7 @@ app.use('/api/terrain', Terrain);
 app.use('/api/reservation', Reservation);
 app.use('/api/contact', Contact);
 app.use('/api/gestioncreneaux', creneauxRoute);
+app.use('/api/demonstration', demo);
 
 app.use('/api/calendriers', CalendriersRouter);
 // 🏥 Health check endpoint
