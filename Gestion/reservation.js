@@ -1,6 +1,6 @@
 import express from 'express';
 import db from '../db.js';
-import { sendReservationConfirmation} from '../services/emailService.js';
+import { sendReservationConfirmation } from '../services/emailService.js';
 
 const router = express.Router();
 
@@ -178,7 +178,7 @@ router.post('/', async (req, res) => {
 
     const result = await db.query(sql, params);
 
-    // Envoyer l'email seulement si le statut est "confirmée" dès la création
+    // ENVOYER L'EMAIL À TOUT UTILISATEUR DONT L'EMAIL EST DANS LA RÉSERVATION
     let emailSent = false;
     let emailError = null;
     
@@ -188,7 +188,7 @@ router.post('/', async (req, res) => {
         
         if (emailResult.success) {
           emailSent = true;
-          console.log('✅ Email de confirmation envoyé avec succès');
+          console.log('✅ Email de confirmation envoyé avec succès à:', email);
         } else {
           emailError = emailResult.error;
           console.error('❌ Erreur envoi email:', emailError);
@@ -238,6 +238,16 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
+    // Récupérer l'ancienne réservation pour vérifier le changement de statut
+    const oldReservationResult = await db.query(
+      'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
+      [id]
+    );
+
+    const oldReservation = oldReservationResult.rows[0];
+    const oldStatus = oldReservation ? oldReservation.statut : null;
+    const oldEmail = oldReservation ? oldReservation.email : null;
+
     const sql = `
       UPDATE reservation 
       SET 
@@ -273,10 +283,43 @@ router.put('/:id', async (req, res) => {
       });
     }
 
+    const updatedReservation = result.rows[0];
+
+    // ENVOYER L'EMAIL SI LE STATUT EST PASSÉ À "CONFIRMÉE" ET QU'IL Y A UN EMAIL
+    let emailSent = false;
+    let emailError = null;
+    
+    // Vérifier si le statut est passé à "confirmée" et qu'il y a un email
+    const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
+    const hasEmail = email && email.trim() !== '';
+    
+    if (becameConfirmed && hasEmail) {
+      try {
+        console.log(`📧 Envoi d'email de confirmation à: ${email}`);
+        
+        const emailResult = await sendReservationConfirmation(updatedReservation);
+        
+        if (emailResult.success) {
+          emailSent = true;
+          console.log('✅ Email envoyé avec succès via Resend');
+        } else {
+          emailError = emailResult.error;
+          console.error('❌ Erreur Resend:', emailError);
+        }
+      } catch (error) {
+        emailError = error.message;
+        console.error('❌ Erreur envoi email:', error);
+      }
+    }
+
     res.json({
       success: true,
-      message: 'Réservation mise à jour avec succès.',
-      data: result.rows[0]
+      message: 'Réservation mise à jour avec succès.' + 
+               (emailSent ? ' Email de confirmation envoyé.' : '') +
+               (emailError ? ` Erreur email: ${emailError}` : ''),
+      data: updatedReservation,
+      emailSent: emailSent,
+      emailError: emailError
     });
 
   } catch (error) {
@@ -334,6 +377,23 @@ router.put('/:id/statut', async (req, res) => {
       });
     }
 
+    // Récupérer l'ancienne réservation pour vérifier le changement de statut
+    const oldReservationResult = await db.query(
+      'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
+      [id]
+    );
+
+    if (oldReservationResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Réservation non trouvée.'
+      });
+    }
+
+    const oldReservation = oldReservationResult.rows[0];
+    const oldStatus = oldReservation.statut;
+    const oldEmail = oldReservation.email;
+
     const sql = `
       UPDATE reservation 
       SET statut = $1 
@@ -343,20 +403,17 @@ router.put('/:id/statut', async (req, res) => {
 
     const result = await db.query(sql, [statut, id]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée.'
-      });
-    }
-
     const reservation = result.rows[0];
 
-    // ENVOYER L'EMAIL AVEC RESEND SI CONFIRMATION
+    // ENVOYER L'EMAIL À TOUT UTILISATEUR DONT L'EMAIL EST DANS LA RÉSERVATION
     let emailSent = false;
     let emailError = null;
     
-    if (statut === 'confirmée' && reservation.email) {
+    // Vérifier si le statut est passé à "confirmée" et qu'il y a un email
+    const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
+    const hasEmail = reservation.email && reservation.email.trim() !== '';
+    
+    if (becameConfirmed && hasEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation à: ${reservation.email}`);
         
