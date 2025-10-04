@@ -86,41 +86,106 @@ export const sendReservationConfirmation = async (reservation) => {
       subject: `✅ Confirmation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
       html: `
         <!DOCTYPE html>
-        <html>
+        <html lang="fr">
         <head>
             <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Confirmation de Réservation</title>
             <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
-                .header { background: #4CAF50; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-                .content { padding: 30px; background: #f9f9f9; border-radius: 0 0 10px 10px; }
-                .details { background: white; padding: 20px; border-radius: 5px; border-left: 4px solid #4CAF50; margin: 20px 0; }
-                .footer { margin-top: 30px; padding: 20px; background: #f0f0f0; text-align: center; border-radius: 5px; font-size: 14px; }
-                .highlight { color: #4CAF50; font-weight: bold; }
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    line-height: 1.6;
+                    color: #2d3748;
+                    background-color: #f8fafc;
+                    margin: 0;
+                    padding: 0;
+                }
+                .container {
+                    max-width: 650px;
+                    margin: 40px auto;
+                    background: #ffffff;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+                    overflow: hidden;
+                }
+                .header {
+                    background-color: #1a202c;
+                    color: #ffffff;
+                    padding: 32px 24px;
+                    text-align: center;
+                }
+                .header h1 {
+                    margin: 0;
+                    font-size: 24px;
+                    font-weight: 600;
+                }
+                .content {
+                    padding: 32px 24px;
+                }
+                .content p {
+                    margin: 16px 0;
+                    font-size: 16px;
+                }
+                .details {
+                    background-color: #f8fafc;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 6px;
+                    padding: 20px;
+                    margin: 24px 0;
+                }
+                .details h3 {
+                    margin-top: 0;
+                    color: #1a202c;
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                .details p {
+                    margin: 8px 0;
+                    font-size: 15px;
+                }
+                .highlight {
+                    color: #2b6cb0;
+                    font-weight: 600;
+                }
+                .footer {
+                    text-align: center;
+                    padding: 24px;
+                    color: #718096;
+                    font-size: 14px;
+                    border-top: 1px solid #edf2f7;
+                    margin-top: 24px;
+                }
+                .footer p {
+                    margin: 4px 0;
+                }
             </style>
         </head>
         <body>
-            <div class="header">
-                <h1>✅ Réservation Confirmée</h1>
-            </div>
-            <div class="content">
-                <p>Bonjour <span class="highlight">${reservation.prenom} ${reservation.nomclient}</span>,</p>
-                <p>Votre réservation a été <span class="highlight">confirmée</span> avec succès.</p>
-                
-                <div class="details">
-                    <h3>📋 Détails de votre réservation :</h3>
-                    <p><strong>🏟️ Terrain :</strong> ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}</p>
-                    <p><strong>🔢 Numéro :</strong> ${reservation.numeroterrain}</p>
-                    <p><strong>📅 Date :</strong> ${new Date(reservation.datereservation).toLocaleDateString('fr-FR')}</p>
-                    <p><strong>⏰ Horaire :</strong> ${reservation.heurereservation} - ${reservation.heurefin}</p>
-                    <p><strong>⚽ Type :</strong> ${reservation.typeterrain || 'Non spécifié'}</p>
-                    <p><strong>💰 Tarif :</strong> ${reservation.tarif || '0'} Dh</p>
+            <div class="container">
+                <div class="header">
+                    <h1>Confirmation de Réservation</h1>
                 </div>
-                
-                <p>📎 Vous trouverez la confirmation officielle en PDF jointe à cet email.</p>
-                <p>🎯 <strong>Important :</strong> Présentez cette confirmation à votre arrivée.</p>
-            </div>
-            <div class="footer">
-                <p>Cordialement,<br><strong>Équipe Terrains de Football</strong></p>
+                <div class="content">
+                    <p>Bonjour <span class="highlight">${reservation.prenom} ${reservation.nomclient}</span>,</p>
+                    <p>Votre réservation a été <span class="highlight">confirmée</span> avec succès.</p>
+                    
+                    <div class="details">
+                        <h3>Détails de votre réservation</h3>
+                        <p><strong>Terrain :</strong> ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}</p>
+                        <p><strong>Numéro :</strong> ${reservation.numeroterrain}</p>
+                        <p><strong>Date :</strong> ${new Date(reservation.datereservation).toLocaleDateString('fr-FR')}</p>
+                        <p><strong>Horaire :</strong> ${reservation.heurereservation} - ${reservation.heurefin}</p>
+                        <p><strong>Type :</strong> ${reservation.typeterrain || 'Non spécifié'}</p>
+                        <p><strong>Tarif :</strong> ${reservation.tarif || '0'} Dh</p>
+                    </div>
+                    
+                    <p>Vous trouverez ci-joint le document officiel de confirmation au format PDF.</p>
+                    <p><strong>Important :</strong> Veuillez présenter cette confirmation à votre arrivée sur le terrain.</p>
+                </div>
+                <div class="footer">
+                    <p>Cordialement,</p>
+                    <p><strong>Équipe Terrains de Football</strong></p>
+                </div>
             </div>
         </body>
         </html>
