@@ -3,7 +3,7 @@ import db from '../db.js';
 import { sendReservationConfirmation } from '../services/emailService.js';
 
 const router = express.Router();
-aa
+
 // 📌 Route pour récupérer les revenus totaux basés sur les réservations confirmées
 router.get('/revenus-totaux', async (req, res) => {
   try {
