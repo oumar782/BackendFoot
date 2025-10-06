@@ -1,44 +1,42 @@
+// routes/statistiques.js
 import express from 'express';
 import db from '../db.js';
 
 const router = express.Router();
 
-// 📌 Route principale pour les statistiques du dashboard
+// 📊 Route principale pour les statistiques du dashboard
 router.get('/dashboard', async (req, res) => {
   try {
     const { periode = 'mois' } = req.query;
-    
-    console.log(`📊 Génération des statistiques pour la période: ${periode}`);
-    
-    // Exécuter toutes les requêtes en parallèle
+
+    // Exécuter toutes les requêtes en parallèle pour de meilleures performances
     const [
-      reservationsResult,
       revenusResult,
+      reservationsResult,
       clientsResult,
       tempsReelResult,
-      tauxRemplissageResult
+      previsionsResult
     ] = await Promise.all([
-      getReservationsStats(periode),
       getRevenusStats(periode),
+      getReservationsStats(periode),
       getClientsStats(periode),
       getStatsTempsReel(),
-      getTauxRemplissageStats(periode)
+      getPrevisionsOccupation()
     ]);
 
     const stats = {
-      reservations: reservationsResult,
       revenus: revenusResult,
+      reservations: reservationsResult,
       clients: clientsResult,
       temps_reel: tempsReelResult,
-      taux_remplissage: tauxRemplissageResult,
+      previsions: previsionsResult,
       metriques: {
         periode: periode,
         date_actualisation: new Date().toISOString(),
-        generation: 'dashboard_complet'
+        generation: 'temps_reel'
       }
     };
 
-    console.log('✅ Statistiques générées avec succès');
     res.json({
       success: true,
       data: stats
@@ -54,377 +52,321 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// 📌 Statistiques des réservations - SIMPLIFIÉE
-async function getReservationsStats(periode) {
-  try {
-    let conditionPeriode = '';
-    let params = [];
-    
-    switch (periode) {
-      case 'jour':
-        conditionPeriode = `AND datereservation = CURRENT_DATE`;
-        break;
-      case 'semaine':
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
-        break;
-      case 'mois':
-      default:
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
-    }
-
-    const sql = `
-      SELECT 
-        COUNT(*) AS total_reservations,
-        COUNT(CASE WHEN statut = 'confirmée' THEN 1 END) AS reservations_confirmees,
-        COUNT(CASE WHEN statut = 'annulée' THEN 1 END) AS reservations_annulees,
-        COUNT(CASE WHEN statut = 'en attente' THEN 1 END) AS reservations_attente,
-        COUNT(DISTINCT idclient) AS clients_uniques,
-        COUNT(DISTINCT numeroterrain) AS terrains_utilises,
-        COALESCE(ROUND(AVG(tarif)::numeric, 2), 0) AS prix_moyen_reservation
-      FROM reservation 
-      WHERE 1=1 ${conditionPeriode}
-    `;
-
-    console.log('📋 SQL Réservations:', sql);
-    const result = await db.query(sql, params);
-    const data = result.rows[0] || {};
-
-    // Tendance simplifiée
-    const tendance = await calculerTendanceReservationsSimple(periode);
-
-    return {
-      total: parseInt(data.total_reservations || 0),
-      confirmees: parseInt(data.reservations_confirmees || 0),
-      annulees: parseInt(data.reservations_annulees || 0),
-      en_attente: parseInt(data.reservations_attente || 0),
-      clients_uniques: parseInt(data.clients_uniques || 0),
-      terrains_utilises: parseInt(data.terrains_utilises || 0),
-      prix_moyen: parseFloat(data.prix_moyen_reservation || 0),
-      tendance: tendance
-    };
-  } catch (error) {
-    console.error('❌ Erreur getReservationsStats:', error);
-    return getDefaultReservationsStats();
-  }
-}
-
-// 📌 Statistiques des revenus - SIMPLIFIÉE
+// 📈 Fonction pour les statistiques de revenus
 async function getRevenusStats(periode) {
-  try {
-    let conditionPeriode = '';
-    
-    switch (periode) {
-      case 'jour':
-        conditionPeriode = `AND datereservation = CURRENT_DATE`;
-        break;
-      case 'semaine':
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
-        break;
-      case 'mois':
-      default:
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
-    }
-
-    const sql = `
-      SELECT 
-        COALESCE(SUM(tarif), 0) AS revenu_total,
-        COUNT(*) AS nb_reservations,
-        COALESCE(ROUND(AVG(tarif)::numeric, 2), 0) AS revenu_moyen,
-        COALESCE(MAX(tarif), 0) AS revenu_max,
-        COALESCE(MIN(tarif), 0) AS revenu_min,
-        COUNT(DISTINCT idclient) AS clients_payants
-      FROM reservation 
-      WHERE statut = 'confirmée'
-      ${conditionPeriode}
-    `;
-
-    console.log('💰 SQL Revenus:', sql);
-    const result = await db.query(sql);
-    const data = result.rows[0] || {};
-
-    // Tendance simplifiée
-    const tendance = await calculerTendanceRevenusSimple(periode);
-
-    return {
-      total: parseFloat(data.revenu_total || 0),
-      moyenne: parseFloat(data.revenu_moyen || 0),
-      maximum: parseFloat(data.revenu_max || 0),
-      minimum: parseFloat(data.revenu_min || 0),
-      reservations: parseInt(data.nb_reservations || 0),
-      clients_payants: parseInt(data.clients_payants || 0),
-      tendance: tendance
-    };
-  } catch (error) {
-    console.error('❌ Erreur getRevenusStats:', error);
-    return getDefaultRevenusStats();
+  let conditionPeriode = '';
+  switch (periode) {
+    case 'jour':
+      conditionPeriode = `AND datereservation = CURRENT_DATE`;
+      break;
+    case 'semaine':
+      conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
+      break;
+    case 'mois':
+      conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
+      break;
+    default:
+      conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
   }
+
+  const sql = `
+    SELECT 
+      COALESCE(SUM(tarif), 0) AS total,
+      COUNT(*) AS nombre_reservations,
+      ROUND(AVG(tarif), 2) AS moyenne_par_reservation,
+      MAX(tarif) AS maximum,
+      MIN(tarif) AS minimum,
+      COUNT(DISTINCT datereservation) AS jours_avec_reservations,
+      ROUND(SUM(tarif) / NULLIF(COUNT(DISTINCT datereservation), 0), 2) AS moyenne_journaliere
+    FROM reservation 
+    WHERE statut = 'confirmée'
+    ${conditionPeriode}
+  `;
+
+  const result = await db.query(sql);
+  const data = result.rows[0];
+
+  // Calcul de l'évolution par rapport à la période précédente
+  const evolution = await calculerEvolutionRevenus(periode);
+
+  return {
+    total: parseFloat(data.total),
+    nombre_reservations: parseInt(data.nombre_reservations),
+    moyenne_par_reservation: parseFloat(data.moyenne_par_reservation),
+    maximum: parseFloat(data.maximum),
+    minimum: parseFloat(data.minimum),
+    moyenne_journaliere: parseFloat(data.moyenne_journaliere),
+    evolution: evolution
+  };
 }
 
-// 📌 Statistiques des clients - SIMPLIFIÉE
+// 📊 Fonction pour les statistiques de réservations
+async function getReservationsStats(periode) {
+  let conditionPeriode = '';
+  switch (periode) {
+    case 'jour':
+      conditionPeriode = `AND datereservation = CURRENT_DATE`;
+      break;
+    case 'semaine':
+      conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
+      break;
+    case 'mois':
+      conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
+      break;
+  }
+
+  const sql = `
+    SELECT 
+      COUNT(*) AS total,
+      COUNT(DISTINCT idclient) AS clients_uniques,
+      COUNT(DISTINCT numeroterrain) AS terrains_utilises,
+      COUNT(DISTINCT datereservation) AS jours_occupes,
+      statut,
+      COUNT(*) AS par_statut
+    FROM reservation 
+    WHERE 1=1 ${conditionPeriode}
+    GROUP BY statut
+  `;
+
+  const result = await db.query(sql);
+  
+  let total = 0;
+  const parStatut = {};
+  let clientsUniques = 0;
+  let terrainsUtilises = 0;
+  let joursOccupes = 0;
+
+  result.rows.forEach(row => {
+    total += parseInt(row.par_statut);
+    parStatut[row.statut] = parseInt(row.par_statut);
+    clientsUniques = Math.max(clientsUniques, parseInt(row.clients_uniques));
+    terrainsUtilises = Math.max(terrainsUtilises, parseInt(row.terrains_utilises));
+    joursOccupes = Math.max(joursOccupes, parseInt(row.jours_occupes));
+  });
+
+  // Taux de confirmation
+  const tauxConfirmation = total > 0 ? 
+    Math.round((parStatut['confirmée'] || 0) / total * 100) : 0;
+
+  // Évolution
+  const evolution = await calculerEvolutionReservations(periode);
+
+  return {
+    total: total,
+    par_statut: parStatut,
+    clients_uniques: clientsUniques,
+    terrains_utilises: terrainsUtilises,
+    jours_occupes: joursOccupes,
+    taux_confirmation: tauxConfirmation,
+    evolution: evolution
+  };
+}
+
+// 👥 Fonction pour les statistiques clients
 async function getClientsStats(periode) {
-  try {
-    // Requête simple pour tous les clients
-    const sql = `
-      SELECT 
-        COUNT(*) AS total_clients,
-        COUNT(CASE WHEN statut = 'actif' THEN 1 END) AS clients_actifs,
-        COUNT(CASE WHEN statut = 'inactif' THEN 1 END) AS clients_inactifs,
-        COUNT(CASE WHEN statut = 'en attente' THEN 1 END) AS clients_attente
-      FROM clients 
-    `;
-
-    console.log('👥 SQL Clients:', sql);
-    const result = await db.query(sql);
-    const data = result.rows[0] || {};
-
-    // Clients actifs cette période (requête séparée)
-    const clientsActifsPeriode = await getClientsActifsPeriode(periode);
-
-    // Tendance simplifiée
-    const tendance = await calculerTendanceClientsSimple(periode);
-
-    return {
-      total: parseInt(data.total_clients || 0),
-      actifs: parseInt(data.clients_actifs || 0),
-      inactifs: parseInt(data.clients_inactifs || 0),
-      en_attente: parseInt(data.clients_attente || 0),
-      actifs_periode: clientsActifsPeriode,
-      tendance: tendance
-    };
-  } catch (error) {
-    console.error('❌ Erreur getClientsStats:', error);
-    return getDefaultClientsStats();
+  let conditionPeriode = '';
+  switch (periode) {
+    case 'jour':
+      conditionPeriode = `AND date_inscription >= CURRENT_DATE`;
+      break;
+    case 'semaine':
+      conditionPeriode = `AND date_inscription >= CURRENT_DATE - INTERVAL '7 days'`;
+      break;
+    case 'mois':
+      conditionPeriode = `AND date_inscription >= CURRENT_DATE - INTERVAL '30 days'`;
+      break;
   }
+
+  // Clients totaux et nouveaux
+  const sqlClients = `
+    SELECT 
+      COUNT(*) AS total_clients,
+      COUNT(CASE WHEN date_inscription >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) AS nouveaux_30j,
+      COUNT(CASE WHEN statut = 'actif' THEN 1 END) AS clients_actifs,
+      COUNT(CASE WHEN statut = 'inactif' THEN 1 END) AS clients_inactifs
+    FROM clients
+    WHERE 1=1 ${conditionPeriode}
+  `;
+
+  // Clients avec réservations
+  const sqlReservations = `
+    SELECT 
+      COUNT(DISTINCT idclient) AS clients_avec_reservations,
+      COUNT(DISTINCT CASE WHEN r.datereservation >= CURRENT_DATE - INTERVAL '30 days' THEN r.idclient END) AS clients_actifs_30j
+    FROM reservation r
+    WHERE r.statut = 'confirmée'
+    ${conditionPeriode.replace('date_inscription', 'r.datereservation')}
+  `;
+
+  const [resultClients, resultReservations] = await Promise.all([
+    db.query(sqlClients),
+    db.query(sqlReservations)
+  ]);
+
+  const dataClients = resultClients.rows[0];
+  const dataReservations = resultReservations.rows[0];
+
+  // Taux de fidélisation
+  const tauxFidelisation = dataClients.total_clients > 0 ?
+    Math.round((dataReservations.clients_avec_reservations / dataClients.total_clients) * 100) : 0;
+
+  // Évolution
+  const evolution = await calculerEvolutionClients(periode);
+
+  return {
+    total: parseInt(dataClients.total_clients),
+    nouveaux_30j: parseInt(dataClients.nouveaux_30j),
+    actifs: parseInt(dataClients.clients_actifs),
+    inactifs: parseInt(dataClients.clients_inactifs),
+    avec_reservations: parseInt(dataReservations.clients_avec_reservations),
+    actifs_30j: parseInt(dataReservations.clients_actifs_30j),
+    taux_fidelisation: tauxFidelisation,
+    evolution: evolution
+  };
 }
 
-// 📌 Clients actifs par période
-async function getClientsActifsPeriode(periode) {
-  try {
-    let conditionPeriode = '';
-    
-    switch (periode) {
-      case 'jour':
-        conditionPeriode = `AND datereservation = CURRENT_DATE`;
-        break;
-      case 'semaine':
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
-        break;
-      case 'mois':
-      default:
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
-    }
-
-    const sql = `
-      SELECT COUNT(DISTINCT idclient) AS count
-      FROM reservation 
-      WHERE statut = 'confirmée'
-      ${conditionPeriode}
-    `;
-
-    const result = await db.query(sql);
-    return parseInt(result.rows[0]?.count || 0);
-  } catch (error) {
-    console.error('❌ Erreur getClientsActifsPeriode:', error);
-    return 0;
-  }
-}
-
-// 📌 Statistiques temps réel - SIMPLIFIÉE
+// ⚡ Fonction pour les statistiques temps réel
 async function getStatsTempsReel() {
-  try {
-    // Terrains occupés actuellement
-    const sqlTerrainsOccupes = `
-      SELECT COUNT(DISTINCT numeroterrain) AS terrains_occupes_actuels
-      FROM reservation 
-      WHERE statut = 'confirmée'
-        AND datereservation = CURRENT_DATE
-        AND heurereservation <= CURRENT_TIME
-        AND heurefin >= CURRENT_TIME
-    `;
+  const maintenant = new Date();
+  const heureActuelle = maintenant.toTimeString().split(' ')[0];
 
-    // Réservations aujourd'hui
-    const sqlReservationsAujourdhui = `
-      SELECT 
-        COUNT(*) AS reservations_aujourdhui,
-        COALESCE(SUM(tarif), 0) AS revenu_aujourdhui
-      FROM reservation 
-      WHERE statut = 'confirmée'
-        AND datereservation = CURRENT_DATE
-    `;
+  const sql = `
+    -- Terrains occupés en ce moment
+    SELECT COUNT(DISTINCT numeroterrain) AS terrains_occupes_actuels
+    FROM reservation 
+    WHERE statut = 'confirmée'
+      AND datereservation = CURRENT_DATE
+      AND heurereservation <= $1
+      AND heurefin >= $1
+    
+    UNION ALL
+    
+    -- Réservations aujourd'hui
+    SELECT COUNT(*) AS reservations_aujourdhui
+    FROM reservation 
+    WHERE statut = 'confirmée'
+      AND datereservation = CURRENT_DATE
+    
+    UNION ALL
+    
+    -- Revenus aujourd'hui
+    SELECT COALESCE(SUM(tarif), 0) AS revenu_aujourdhui
+    FROM reservation 
+    WHERE statut = 'confirmée'
+      AND datereservation = CURRENT_DATE
+    
+    UNION ALL
+    
+    -- Prochaines réservations (dans les 2h)
+    SELECT COUNT(*) AS prochaines_reservations
+    FROM reservation 
+    WHERE statut = 'confirmée'
+      AND datereservation = CURRENT_DATE
+      AND heurereservation BETWEEN $1 AND (CURRENT_TIME + INTERVAL '2 hours')
+  `;
 
-    const [terrainsResult, reservationsResult] = await Promise.all([
-      db.query(sqlTerrainsOccupes),
-      db.query(sqlReservationsAujourdhui)
-    ]);
-
-    return {
-      terrains_occupes: parseInt(terrainsResult.rows[0]?.terrains_occupes_actuels || 0),
-      reservations_aujourdhui: parseInt(reservationsResult.rows[0]?.reservations_aujourdhui || 0),
-      revenu_aujourdhui: parseFloat(reservationsResult.rows[0]?.revenu_aujourdhui || 0),
-      reservations_restantes: 0, // Simplifié
-      prochaines_reservations: 0  // Simplifié
-    };
-  } catch (error) {
-    console.error('❌ Erreur getStatsTempsReel:', error);
-    return getDefaultTempsReelStats();
-  }
+  const result = await db.query(sql, [heureActuelle]);
+  
+  return {
+    terrains_occupes_actuels: parseInt(result.rows[0]?.terrains_occupes_actuels || 0),
+    reservations_aujourdhui: parseInt(result.rows[1]?.reservations_aujourdhui || 0),
+    revenu_aujourdhui: parseFloat(result.rows[2]?.revenu_aujourdhui || 0),
+    prochaines_reservations: parseInt(result.rows[3]?.prochaines_reservations || 0),
+    heure_actualisation: heureActuelle
+  };
 }
 
-// 📌 Statistiques taux de remplissage - SIMPLIFIÉE
-async function getTauxRemplissageStats(periode) {
-  try {
-    let conditionPeriode = '';
-    
-    switch (periode) {
-      case 'jour':
-        conditionPeriode = `AND datereservation = CURRENT_DATE`;
-        break;
-      case 'semaine':
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
-        break;
-      case 'mois':
-      default:
-        conditionPeriode = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
-    }
-
-    // Calcul simplifié du taux de remplissage
-    const sql = `
+// 🔮 Fonction pour les prévisions d'occupation
+async function getPrevisionsOccupation() {
+  const sql = `
+    WITH previsions_14j AS (
       SELECT 
-        COUNT(DISTINCT datereservation) AS jours_activite,
-        COUNT(DISTINCT numeroterrain) AS terrains_utilises,
-        COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees_total
+        datereservation,
+        COUNT(*) AS nb_reservations,
+        COALESCE(SUM(tarif), 0) AS revenu_prevue,
+        COUNT(DISTINCT numeroterrain) AS terrains_occupes,
+        ROUND(
+          (COUNT(DISTINCT numeroterrain) * 12.0 / 
+          NULLIF((SELECT COUNT(DISTINCT numeroterrain) FROM terrain) * 12, 0)) * 100, 2
+        ) AS taux_occupation_prevue
       FROM reservation
       WHERE statut = 'confirmée'
-      ${conditionPeriode}
-    `;
+        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '14 days'
+      GROUP BY datereservation
+    )
+    SELECT 
+      AVG(taux_occupation_prevue) AS taux_moyen_prevue,
+      MAX(taux_occupation_prevue) AS taux_max_prevue,
+      MIN(taux_occupation_prevue) AS taux_min_prevue,
+      SUM(nb_reservations) AS reservations_totales_prevues,
+      SUM(revenu_prevue) AS revenu_total_prevue,
+      COUNT(*) AS jours_avec_reservations
+    FROM previsions_14j
+  `;
 
-    console.log('📈 SQL Remplissage:', sql);
-    const result = await db.query(sql);
-    const data = result.rows[0] || {};
+  const result = await db.query(sql);
+  const data = result.rows[0];
 
-    const joursActivite = parseInt(data.jours_activite || 0);
-    const terrainsUtilises = parseInt(data.terrains_utilises || 1);
-    const heuresReserveesTotal = parseFloat(data.heures_reservees_total || 0);
-    
-    // Calcul du taux moyen (simplifié)
-    const heuresDisponiblesTotal = joursActivite * terrainsUtilises * 12; // 12h par jour par terrain
-    const tauxMoyen = heuresDisponiblesTotal > 0 ? (heuresReserveesTotal / heuresDisponiblesTotal) * 100 : 0;
-
-    const tendance = await calculerTendanceRemplissageSimple(periode);
-
-    return {
-      moyen: Math.round(tauxMoyen),
-      maximum: Math.round(tauxMoyen * 1.2), // Estimation
-      minimum: Math.round(tauxMoyen * 0.8), // Estimation
-      jours_activite: joursActivite,
-      terrains_utilises: terrainsUtilises,
-      tendance: tendance
-    };
-  } catch (error) {
-    console.error('❌ Erreur getTauxRemplissageStats:', error);
-    return getDefaultRemplissageStats();
-  }
-}
-
-// 📌 Tendances SIMPLIFIÉES (valeurs fixes pour l'instant)
-async function calculerTendanceReservationsSimple(periode) {
   return {
-    valeur: 12.5,
-    isPositive: true,
-    label: `vs ${getLabelPeriodePrecedente(periode)}`
+    taux_moyen_prevue: parseFloat(data.taux_moyen_prevue || 0),
+    taux_max_prevue: parseFloat(data.taux_max_prevue || 0),
+    taux_min_prevue: parseFloat(data.taux_min_prevue || 0),
+    reservations_totales_prevues: parseInt(data.reservations_totales_prevues || 0),
+    revenu_total_prevue: parseFloat(data.revenu_total_prevue || 0),
+    jours_avec_reservations: parseInt(data.jours_avec_reservations || 0),
+    periode_prevision: '14_jours'
   };
 }
 
-async function calculerTendanceRevenusSimple(periode) {
-  return {
-    valeur: 8.2,
-    isPositive: true,
-    label: `vs ${getLabelPeriodePrecedente(periode)}`
-  };
-}
-
-async function calculerTendanceClientsSimple(periode) {
-  return {
-    valeur: 3.1,
-    isPositive: true,
-    label: `vs ${getLabelPeriodePrecedente(periode)}`
-  };
-}
-
-async function calculerTendanceRemplissageSimple(periode) {
-  return {
-    valeur: 5.5,
-    isPositive: true,
-    label: `vs ${getLabelPeriodePrecedente(periode)}`
-  };
-}
-
-// 📌 Données par défaut en cas d'erreur
-function getDefaultReservationsStats() {
-  return {
-    total: 0,
-    confirmees: 0,
-    annulees: 0,
-    en_attente: 0,
-    clients_uniques: 0,
-    terrains_utilises: 0,
-    prix_moyen: 0,
-    tendance: { valeur: 0, isPositive: true, label: 'vs période précédente' }
-  };
-}
-
-function getDefaultRevenusStats() {
-  return {
-    total: 0,
-    moyenne: 0,
-    maximum: 0,
-    minimum: 0,
-    reservations: 0,
-    clients_payants: 0,
-    tendance: { valeur: 0, isPositive: true, label: 'vs période précédente' }
-  };
-}
-
-function getDefaultClientsStats() {
-  return {
-    total: 0,
-    actifs: 0,
-    inactifs: 0,
-    en_attente: 0,
-    actifs_periode: 0,
-    tendance: { valeur: 0, isPositive: true, label: 'vs période précédente' }
-  };
-}
-
-function getDefaultTempsReelStats() {
-  return {
-    terrains_occupes: 0,
-    reservations_aujourdhui: 0,
-    revenu_aujourdhui: 0,
-    reservations_restantes: 0,
-    prochaines_reservations: 0
-  };
-}
-
-function getDefaultRemplissageStats() {
-  return {
-    moyen: 0,
-    maximum: 0,
-    minimum: 0,
-    jours_activite: 0,
-    terrains_utilises: 0,
-    tendance: { valeur: 0, isPositive: true, label: 'vs période précédente' }
-  };
-}
-
-// 📌 Fonction utilitaire pour les labels de période
-function getLabelPeriodePrecedente(periode) {
+// 📈 Fonctions de calcul d'évolution
+async function calculerEvolutionRevenus(periode) {
+  let conditionActuelle = '';
+  let conditionPrecedente = '';
+  
   switch (periode) {
-    case 'jour': return 'hier';
-    case 'semaine': return 'semaine dernière';
-    case 'mois': return 'mois dernier';
-    default: return 'période précédente';
+    case 'jour':
+      conditionActuelle = `AND datereservation = CURRENT_DATE`;
+      conditionPrecedente = `AND datereservation = CURRENT_DATE - INTERVAL '1 day'`;
+      break;
+    case 'semaine':
+      conditionActuelle = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE`;
+      conditionPrecedente = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '14 days' AND CURRENT_DATE - INTERVAL '7 days'`;
+      break;
+    case 'mois':
+      conditionActuelle = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE`;
+      conditionPrecedente = `AND datereservation BETWEEN CURRENT_DATE - INTERVAL '60 days' AND CURRENT_DATE - INTERVAL '30 days'`;
+      break;
   }
+
+  const sql = `
+    SELECT 
+      (SELECT COALESCE(SUM(tarif), 0) FROM reservation WHERE statut = 'confirmée' ${conditionActuelle}) AS actuel,
+      (SELECT COALESCE(SUM(tarif), 0) FROM reservation WHERE statut = 'confirmée' ${conditionPrecedente}) AS precedent
+  `;
+
+  const result = await db.query(sql);
+  const actuel = parseFloat(result.rows[0].actuel);
+  const precedent = parseFloat(result.rows[0].precedent);
+
+  const evolution = precedent > 0 ? 
+    Math.round(((actuel - precedent) / precedent) * 100) : 
+    (actuel > 0 ? 100 : 0);
+
+  return {
+    valeur: evolution,
+    est_positif: evolution >= 0,
+    periode_comparaison: periode
+  };
+}
+
+async function calculerEvolutionReservations(periode) {
+  // Implémentation similaire à calculerEvolutionRevenus
+  // ... (code similaire adapté pour les réservations)
+}
+
+async function calculerEvolutionClients(periode) {
+  // Implémentation similaire à calculerEvolutionRevenus
+  // ... (code similaire adapté pour les clients)
 }
 
 export default router;
