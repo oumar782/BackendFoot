@@ -7,182 +7,98 @@ const router = express.Router();
 // 📊 Statistiques globales pour le dashboard
 router.get('/dashboard', async (req, res) => {
   try {
-    const { periode = 'month' } = req.query;
-
-    // Déterminer l'intervalle en fonction de la période
-    let intervalCondition = '';
-    let dateTrunc = 'month';
-    
-    switch(periode) {
-      case 'day':
-        intervalCondition = `AND datereservation >= CURRENT_DATE`;
-        dateTrunc = 'day';
-        break;
-      case 'week':
-        intervalCondition = `AND datereservation >= DATE_TRUNC('week', CURRENT_DATE)`;
-        dateTrunc = 'week';
-        break;
-      case 'month':
-      default:
-        intervalCondition = `AND datereservation >= DATE_TRUNC('month', CURRENT_DATE)`;
-        dateTrunc = 'month';
-    }
-
-    // Requêtes parallèles pour meilleures performances
+    // Récupérer les statistiques en parallèle pour plus de performance
     const [
-      revenusResult,
-      reservationsResult,
-      clientsResult,
-      terrainsResult,
-      tempsReelResult,
-      tendancesResult
+      revenusMois,
+      reservationsMois,
+      clientsActifs,
+      tauxRemplissage,
+      statsTempsReel,
+      revenusAnnee
     ] = await Promise.all([
-      // Revenus totaux
+      // Revenus du mois actuel
       db.query(`
-        SELECT 
-          COALESCE(SUM(tarif), 0) as revenu_total,
-          COUNT(*) as nb_reservations,
-          ROUND(AVG(tarif), 2) as revenu_moyen,
-          MAX(tarif) as revenu_max,
-          MIN(tarif) as revenu_min
+        SELECT COALESCE(SUM(tarif), 0) as revenus_mois
         FROM reservation 
         WHERE statut = 'confirmée'
-          ${intervalCondition}
+        AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+        AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
       `),
-
-      // Réservations par statut
+      
+      // Réservations du mois
       db.query(`
-        SELECT 
-          statut,
-          COUNT(*) as count,
-          ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM reservation WHERE datereservation >= DATE_TRUNC('${dateTrunc}', CURRENT_DATE)), 0), 2) as percentage
-        FROM reservation 
-        WHERE datereservation >= DATE_TRUNC('${dateTrunc}', CURRENT_DATE)
-        GROUP BY statut
-      `),
-
-      // Clients actifs
-      db.query(`
-        SELECT 
-          COUNT(*) as total_clients,
-          COUNT(CASE WHEN statut = 'actif' THEN 1 END) as clients_actifs,
-          COUNT(CASE WHEN statut = 'inactif' THEN 1 END) as clients_inactifs
-        FROM clients
-      `),
-
-      // Occupation des terrains
-      db.query(`
-        SELECT 
-          COUNT(DISTINCT numeroterrain) as terrains_utilises,
-          COUNT(*) as total_reservations,
-          COALESCE(SUM(tarif), 0) as revenu_total
+        SELECT COUNT(*) as reservations_mois
         FROM reservation 
         WHERE statut = 'confirmée'
-          ${intervalCondition}
+        AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+        AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
       `),
-
-      // Données temps réel
+      
+      // Clients actifs ce mois-ci
+      db.query(`
+        SELECT COUNT(DISTINCT idclient) as clients_actifs
+        FROM reservation 
+        WHERE statut = 'confirmée'
+        AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+        AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
+      `),
+      
+      // Taux de remplissage moyen du mois
       db.query(`
         SELECT 
-          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'confirmée' THEN 1 END) as reservations_aujourdhui,
-          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'annulée' THEN 1 END) as annulations_aujourdhui,
-          COALESCE(SUM(CASE WHEN datereservation = CURRENT_DATE AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) as revenu_aujourdhui,
-          COUNT(DISTINCT CASE WHEN datereservation = CURRENT_DATE AND statut = 'confirmée' THEN numeroterrain END) as terrains_occupes_aujourdhui
+          ROUND(
+            (COUNT(*) * 100.0 / 
+            (SELECT COUNT(DISTINCT numeroterrain) * 30 FROM reservation WHERE EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE))
+            ), 2
+          ) as taux_remplissage
+        FROM reservation 
+        WHERE statut = 'confirmée'
+        AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+      `),
+      
+      // Statistiques temps réel
+      db.query(`
+        SELECT 
+          COUNT(CASE WHEN datereservation = CURRENT_DATE THEN 1 END) as reservations_aujourdhui,
+          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'confirmée' THEN 1 END) as confirmes_aujourdhui,
+          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'annulée' THEN 1 END) as annules_aujourdhui
         FROM reservation
       `),
-
-      // Tendances vs période précédente
+      
+      // Revenus de l'année pour le trend
       db.query(`
-        WITH current_period AS (
-          SELECT 
-            COUNT(*) as reservations_courantes,
-            COALESCE(SUM(tarif), 0) as revenu_courant
-          FROM reservation 
-          WHERE statut = 'confirmée'
-            ${intervalCondition}
-        ),
-        previous_period AS (
-          SELECT 
-            COUNT(*) as reservations_precedentes,
-            COALESCE(SUM(tarif), 0) as revenu_precedent
-          FROM reservation 
-          WHERE statut = 'confirmée'
-            AND datereservation >= DATE_TRUNC('${dateTrunc}', CURRENT_DATE - INTERVAL '1 ${dateTrunc}')
-            AND datereservation < DATE_TRUNC('${dateTrunc}', CURRENT_DATE)
-        )
-        SELECT 
-          cp.reservations_courantes,
-          cp.revenu_courant,
-          pp.reservations_precedentes,
-          pp.revenu_precedent,
-          CASE 
-            WHEN pp.reservations_precedentes > 0 THEN
-              ROUND(((cp.reservations_courantes - pp.reservations_precedentes)::decimal / pp.reservations_precedentes * 100), 2)
-            ELSE 100
-          END as evolution_reservations,
-          CASE 
-            WHEN pp.revenu_precedent > 0 THEN
-              ROUND(((cp.revenu_courant - pp.revenu_precedent)::decimal / pp.revenu_precedent * 100), 2)
-            ELSE 100
-          END as evolution_revenus
-        FROM current_period cp, previous_period pp
+        SELECT COALESCE(SUM(tarif), 0) as revenus_annee
+        FROM reservation 
+        WHERE statut = 'confirmée'
+        AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
       `)
     ]);
 
     const stats = {
-      periode: periode,
-      date_actualisation: new Date().toISOString(),
-      
-      // Métriques principales
-      revenus: {
-        total: parseFloat(revenusResult.rows[0].revenu_total),
-        moyen: parseFloat(revenusResult.rows[0].revenu_moyen),
-        max: parseFloat(revenusResult.rows[0].revenu_max),
-        min: parseFloat(revenusResult.rows[0].revenu_min),
-        reservations: parseInt(revenusResult.rows[0].nb_reservations)
-      },
-
-      reservations: {
-        par_statut: reservationsResult.rows,
-        total: reservationsResult.rows.reduce((sum, row) => sum + parseInt(row.count), 0)
-      },
-
-      clients: {
-        total: parseInt(clientsResult.rows[0].total_clients),
-        actifs: parseInt(clientsResult.rows[0].clients_actifs),
-        inactifs: parseInt(clientsResult.rows[0].clients_inactifs),
-        taux_activation: clientsResult.rows[0].total_clients > 0 ? 
-          Math.round((parseInt(clientsResult.rows[0].clients_actifs) / parseInt(clientsResult.rows[0].total_clients)) * 100) : 0
-      },
-
-      terrains: {
-        utilises: parseInt(terrainsResult.rows[0].terrains_utilises),
-        total_reservations: parseInt(terrainsResult.rows[0].total_reservations),
-        revenu_total: parseFloat(terrainsResult.rows[0].revenu_total)
-      },
-
-      temps_reel: {
-        reservations_aujourdhui: parseInt(tempsReelResult.rows[0].reservations_aujourdhui),
-        annulations_aujourdhui: parseInt(tempsReelResult.rows[0].annulations_aujourdhui),
-        revenu_aujourdhui: parseFloat(tempsReelResult.rows[0].revenu_aujourdhui),
-        terrains_occupes_aujourdhui: parseInt(tempsReelResult.rows[0].terrains_occupes_aujourdhui)
-      },
-
-      tendances: {
-        evolution_reservations: parseFloat(tendancesResult.rows[0].evolution_reservations) || 0,
-        evolution_revenus: parseFloat(tendancesResult.rows[0].evolution_revenus) || 0,
-        reservations_courantes: parseInt(tendancesResult.rows[0].reservations_courantes),
-        reservations_precedentes: parseInt(tendancesResult.rows[0].reservations_precedentes)
-      }
+      revenus_mois: parseFloat(revenusMois.rows[0]?.revenus_mois || 0),
+      reservations_mois: parseInt(reservationsMois.rows[0]?.reservations_mois || 0),
+      clients_actifs: parseInt(clientsActifs.rows[0]?.clients_actifs || 0),
+      taux_remplissage: parseFloat(tauxRemplissage.rows[0]?.taux_remplissage || 0),
+      reservations_aujourdhui: parseInt(statsTempsReel.rows[0]?.reservations_aujourdhui || 0),
+      confirmes_aujourdhui: parseInt(statsTempsReel.rows[0]?.confirmes_aujourdhui || 0),
+      annules_aujourdhui: parseInt(statsTempsReel.rows[0]?.annules_aujourdhui || 0),
+      revenus_annee: parseFloat(revenusAnnee.rows[0]?.revenus_annee || 0)
     };
 
+    // Calcul des trends
+    const trends = await calculateTrends(stats);
+
     res.json({
       success: true,
-      data: stats
+      data: {
+        ...stats,
+        trends
+      },
+      last_updated: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('❌ Erreur dashboard stats:', error);
+    console.error('❌ Erreur statistiques dashboard:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -191,87 +107,38 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// 📈 Statistiques détaillées par période
-router.get('/periodiques', async (req, res) => {
+// 📈 Évolution des revenus sur 12 mois
+router.get('/evolution-revenus', async (req, res) => {
   try {
-    const { type = 'day', limite = 30 } = req.query;
-
-    let sql = '';
-    
-    switch (type) {
-      case 'day':
-        sql = `
-          SELECT 
-            datereservation as date,
-            TO_CHAR(datereservation, 'DD/MM') as date_formattee,
-            COUNT(*) as nb_reservations,
-            COALESCE(SUM(tarif), 0) as revenu,
-            COUNT(DISTINCT numeroterrain) as terrains_utilises,
-            COUNT(DISTINCT idclient) as clients_uniques,
-            ROUND(AVG(tarif), 2) as revenu_moyen
-          FROM reservation 
-          WHERE statut = 'confirmée'
-            AND datereservation >= CURRENT_DATE - INTERVAL '${limite} days'
-          GROUP BY datereservation
-          ORDER BY datereservation DESC
-          LIMIT ${limite}
-        `;
-        break;
-
-      case 'week':
-        sql = `
-          SELECT 
-            DATE_TRUNC('week', datereservation) as date_debut_semaine,
-            COUNT(*) as nb_reservations,
-            COALESCE(SUM(tarif), 0) as revenu,
-            COUNT(DISTINCT numeroterrain) as terrains_utilises,
-            COUNT(DISTINCT idclient) as clients_uniques,
-            ROUND(AVG(tarif), 2) as revenu_moyen
-          FROM reservation 
-          WHERE statut = 'confirmée'
-            AND datereservation >= CURRENT_DATE - INTERVAL '${limite * 7} days'
-          GROUP BY DATE_TRUNC('week', datereservation)
-          ORDER BY date_debut_semaine DESC
-          LIMIT ${limite}
-        `;
-        break;
-
-      case 'month':
-      default:
-        sql = `
-          SELECT 
-            DATE_TRUNC('month', datereservation) as date_debut_mois,
-            COUNT(*) as nb_reservations,
-            COALESCE(SUM(tarif), 0) as revenu,
-            COUNT(DISTINCT numeroterrain) as terrains_utilises,
-            COUNT(DISTINCT idclient) as clients_uniques,
-            ROUND(AVG(tarif), 2) as revenu_moyen
-          FROM reservation 
-          WHERE statut = 'confirmée'
-            AND datereservation >= CURRENT_DATE - INTERVAL '${limite * 30} days'
-          GROUP BY DATE_TRUNC('month', datereservation)
-          ORDER BY date_debut_mois DESC
-          LIMIT ${limite}
-        `;
-    }
-
-    const result = await db.query(sql);
+    const result = await db.query(`
+      WITH mois_series AS (
+        SELECT generate_series(
+          CURRENT_DATE - INTERVAL '11 months',
+          CURRENT_DATE,
+          '1 month'::interval
+        )::date as mois
+      )
+      SELECT 
+        TO_CHAR(ms.mois, 'YYYY-MM') as periode,
+        TO_CHAR(ms.mois, 'Mon YYYY') as periode_affichage,
+        COALESCE(SUM(r.tarif), 0) as revenus,
+        COUNT(r.numeroreservations) as reservations,
+        COUNT(DISTINCT r.idclient) as clients_uniques
+      FROM mois_series ms
+      LEFT JOIN reservation r ON 
+        EXTRACT(YEAR FROM r.datereservation) = EXTRACT(YEAR FROM ms.mois)
+        AND EXTRACT(MONTH FROM r.datereservation) = EXTRACT(MONTH FROM ms.mois)
+        AND r.statut = 'confirmée'
+      GROUP BY ms.mois
+      ORDER BY ms.mois ASC
+    `);
 
     res.json({
       success: true,
-      type: type,
-      limite: parseInt(limite),
-      data: result.rows,
-      statistiques: {
-        total_revenu: result.rows.reduce((sum, row) => sum + parseFloat(row.revenu), 0),
-        total_reservations: result.rows.reduce((sum, row) => sum + parseInt(row.nb_reservations), 0),
-        moyenne_revenu: result.rows.length > 0 ? 
-          Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.revenu), 0) / result.rows.length) : 0
-      }
+      data: result.rows
     });
-
   } catch (error) {
-    console.error('❌ Erreur stats périodiques:', error);
+    console.error('❌ Erreur évolution revenus:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -280,87 +147,122 @@ router.get('/periodiques', async (req, res) => {
   }
 });
 
-// 🎯 Statistiques KPI basiques
-router.get('/kpi', async (req, res) => {
+// 🎯 Performance des terrains
+router.get('/performance-terrains', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        numeroterrain,
+        nomterrain,
+        typeterrain,
+        COUNT(*) as total_reservations,
+        COALESCE(SUM(tarif), 0) as revenus_generes,
+        ROUND(AVG(tarif), 2) as revenu_moyen,
+        COUNT(DISTINCT idclient) as clients_uniques,
+        ROUND(
+          (COUNT(*) * 100.0 / 
+          (SELECT COUNT(*) FROM reservation WHERE statut = 'confirmée' AND datereservation >= CURRENT_DATE - INTERVAL '30 days')
+          ), 2
+        ) as part_marche
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY numeroterrain, nomterrain, typeterrain
+      ORDER BY revenus_generes DESC
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('❌ Erreur performance terrains:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 👥 Statistiques clients
+router.get('/statistiques-clients', async (req, res) => {
   try {
     const [
-      tauxOccupationResult,
-      clientsFrequentsResult,
-      performanceTerrainsResult
+      clientsFideles,
+      nouveauxClients,
+      statsReservations
     ] = await Promise.all([
-
-      // Taux d'occupation basique
+      // Clients les plus fidèles
       db.query(`
         SELECT 
-          COUNT(*) as total_reservations,
-          COUNT(DISTINCT numeroterrain) as terrains_utilises,
-          COUNT(DISTINCT datereservation) as jours_occupes,
-          COALESCE(SUM(tarif), 0) as revenu_total
-        FROM reservation 
-        WHERE statut = 'confirmée'
-          AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
+          c.idclient,
+          c.nom,
+          c.prenom,
+          c.email,
+          COUNT(r.numeroreservations) as total_reservations,
+          COALESCE(SUM(r.tarif), 0) as total_depense,
+          MAX(r.datereservation) as derniere_reservation
+        FROM clients c
+        JOIN reservation r ON c.idclient = r.idclient
+        WHERE r.statut = 'confirmée'
+        GROUP BY c.idclient, c.nom, c.prenom, c.email
+        ORDER BY total_reservations DESC
+        LIMIT 10
       `),
-
-      // Clients fréquents
+      
+      // Nouveaux clients du mois
       db.query(`
         SELECT 
-          COUNT(DISTINCT idclient) as clients_total,
-          COUNT(CASE WHEN nb_reservations >= 2 THEN 1 END) as clients_frequents
+          c.idclient,
+          c.nom,
+          c.prenom,
+          c.email,
+          c.telephone,
+          c.statut,
+          COUNT(r.numeroreservations) as reservations_mois
+        FROM clients c
+        LEFT JOIN reservation r ON c.idclient = r.idclient 
+          AND EXTRACT(MONTH FROM r.datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+          AND r.statut = 'confirmée'
+        WHERE c.idclient IN (
+          SELECT DISTINCT idclient 
+          FROM reservation 
+          WHERE EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+        )
+        GROUP BY c.idclient, c.nom, c.prenom, c.email, c.telephone, c.statut
+        ORDER BY reservations_mois DESC
+      `),
+      
+      // Stats générales clients
+      db.query(`
+        SELECT 
+          COUNT(DISTINCT idclient) as total_clients,
+          COUNT(DISTINCT CASE WHEN statut = 'actif' THEN idclient END) as clients_actifs,
+          COUNT(DISTINCT CASE WHEN statut = 'inactif' THEN idclient END) as clients_inactifs,
+          ROUND(AVG(reservations_par_client), 2) as reservations_moyennes
         FROM (
           SELECT 
             idclient,
-            COUNT(*) as nb_reservations
+            statut,
+            COUNT(*) as reservations_par_client
           FROM reservation 
           WHERE statut = 'confirmée'
-            AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-          GROUP BY idclient
-        ) as reservations_par_client
-      `),
-
-      // Performance par terrain
-      db.query(`
-        SELECT 
-          numeroterrain,
-          COUNT(*) as nb_reservations,
-          COALESCE(SUM(tarif), 0) as revenu_total,
-          ROUND(AVG(tarif), 2) as revenu_moyen
-        FROM reservation 
-        WHERE statut = 'confirmée'
-          AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
-        GROUP BY numeroterrain
-        ORDER BY revenu_total DESC
-        LIMIT 10
+          GROUP BY idclient, statut
+        ) stats_clients
       `)
     ]);
 
-    const totalReservations = parseInt(tauxOccupationResult.rows[0].total_reservations);
-    const joursOccupes = parseInt(tauxOccupationResult.rows[0].jours_occupes);
-    const tauxOccupation = joursOccupes > 0 ? (totalReservations / joursOccupes).toFixed(1) : 0;
-
-    const kpis = {
-      occupation: {
-        reservations_total: totalReservations,
-        terrains_utilises: parseInt(tauxOccupationResult.rows[0].terrains_utilises),
-        jours_occupes: joursOccupes,
-        taux_occupation_moyen: parseFloat(tauxOccupation),
-        revenu_total: parseFloat(tauxOccupationResult.rows[0].revenu_total)
-      },
-      clients: {
-        total: parseInt(clientsFrequentsResult.rows[0].clients_total),
-        frequents: parseInt(clientsFrequentsResult.rows[0].clients_frequents),
-        taux_fidelisation: clientsFrequentsResult.rows[0].clients_total > 0 ?
-          Math.round((parseInt(clientsFrequentsResult.rows[0].clients_frequents) / parseInt(clientsFrequentsResult.rows[0].clients_total)) * 100) : 0
-      },
-      terrains: performanceTerrainsResult.rows
-    };
-
     res.json({
       success: true,
-      data: kpis
+      data: {
+        clients_fideles: clientsFideles.rows,
+        nouveaux_clients: nouveauxClients.rows,
+        statistiques: statsReservations.rows[0]
+      }
     });
-
   } catch (error) {
-    console.error('❌ Erreur KPI stats:', error);
+    console.error('❌ Erreur statistiques clients:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -368,5 +270,131 @@ router.get('/kpi', async (req, res) => {
     });
   }
 });
+
+// 🔮 Prévisions et tendances
+router.get('/previsions-tendances', async (req, res) => {
+  try {
+    const { periode = '30' } = req.query;
+    
+    const result = await db.query(`
+      WITH reservations_futures AS (
+        SELECT 
+          datereservation,
+          COUNT(*) as reservations_prevues,
+          COALESCE(SUM(tarif), 0) as revenus_prevus,
+          COUNT(DISTINCT numeroterrain) as terrains_occupes
+        FROM reservation 
+        WHERE statut = 'confirmée'
+          AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${periode} days'
+        GROUP BY datereservation
+      ),
+      stats_historiques AS (
+        SELECT 
+          ROUND(AVG(reservations_jour), 2) as reservations_moyennes,
+          ROUND(AVG(revenus_jour), 2) as revenus_moyens
+        FROM (
+          SELECT 
+            datereservation,
+            COUNT(*) as reservations_jour,
+            COALESCE(SUM(tarif), 0) as revenus_jour
+          FROM reservation 
+          WHERE statut = 'confirmée'
+            AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE - INTERVAL '1 day'
+          GROUP BY datereservation
+        ) historique
+      )
+      SELECT 
+        rf.datereservation,
+        TO_CHAR(rf.datereservation, 'DD/MM') as date_formattee,
+        rf.reservations_prevues,
+        rf.revenus_prevus,
+        rf.terrains_occupes,
+        sh.reservations_moyennes,
+        sh.revenus_moyens,
+        CASE 
+          WHEN rf.reservations_prevues > sh.reservations_moyennes THEN 'supérieur'
+          WHEN rf.reservations_prevues < sh.reservations_moyennes THEN 'inférieur'
+          ELSE 'identique'
+        END as tendance_reservations,
+        CASE 
+          WHEN rf.revenus_prevus > sh.revenus_moyens THEN 'supérieur'
+          WHEN rf.revenus_prevus < sh.revenus_moyens THEN 'inférieur'
+          ELSE 'identique'
+        END as tendance_revenus
+      FROM reservations_futures rf
+      CROSS JOIN stats_historiques sh
+      ORDER BY rf.datereservation ASC
+    `);
+
+    // Calcul des totaux et moyennes
+    const stats = {
+      reservations_total: result.rows.reduce((sum, row) => sum + parseInt(row.reservations_prevues), 0),
+      revenus_total: result.rows.reduce((sum, row) => sum + parseFloat(row.revenus_prevus), 0),
+      jours_avec_reservations: result.rows.length,
+      revenu_moyen_par_jour: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.revenus_prevus), 0) / result.rows.length),
+      jours_superieurs_moyenne: result.rows.filter(row => row.tendance_revenus === 'supérieur').length
+    };
+
+    res.json({
+      success: true,
+      data: result.rows,
+      statistiques: stats,
+      periode_analyse: parseInt(periode)
+    });
+  } catch (error) {
+    console.error('❌ Erreur prévisions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// Fonction utilitaire pour calculer les trends
+async function calculateTrends(currentStats) {
+  try {
+    const lastMonthStats = await db.query(`
+      SELECT 
+        COALESCE(SUM(tarif), 0) as revenus_mois_dernier,
+        COUNT(*) as reservations_mois_dernier
+      FROM reservation 
+      WHERE statut = 'confirmée'
+      AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month')
+      AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')
+    `);
+
+    const lastMonth = lastMonthStats.rows[0];
+    
+    const trends = {
+      revenus: {
+        value: calculatePercentageChange(currentStats.revenus_mois, lastMonth.revenus_mois_dernier),
+        isPositive: currentStats.revenus_mois > lastMonth.revenus_mois_dernier
+      },
+      reservations: {
+        value: calculatePercentageChange(currentStats.reservations_mois, lastMonth.reservations_mois_dernier),
+        isPositive: currentStats.reservations_mois > lastMonth.reservations_mois_dernier
+      },
+      clients: {
+        value: 5, // Valeur par défaut, à adapter selon vos besoins
+        isPositive: true
+      },
+      remplissage: {
+        value: 2, // Valeur par défaut
+        isPositive: currentStats.taux_remplissage > 70
+      }
+    };
+
+    return trends;
+  } catch (error) {
+    console.error('Erreur calcul trends:', error);
+    return {};
+  }
+}
+
+function calculatePercentageChange(current, previous) {
+  if (previous === 0) return 100;
+  return Math.round(((current - previous) / previous) * 100);
+}
 
 export default router;
