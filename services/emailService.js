@@ -1,6 +1,7 @@
 import { Resend } from 'resend';
 import PDFDocument from 'pdfkit';
 
+// Initialisation de Resend avec la clé API
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const generateReservationPDF = (reservation) => {
@@ -157,26 +158,41 @@ const generateReservationPDF = (reservation) => {
 
 export const sendReservationConfirmation = async (reservation) => {
   try {
-    if (!process.env.RESEND_API_KEY) {
-      console.error('CLÉ RESEND MANQUANTE - Configurez RESEND_API_KEY dans Vercel');
+    // Vérification plus robuste de la clé API
+    if (!process.env.RESEND_API_KEY || process.env.RESEND_API_KEY === 'your_resend_api_key_here') {
+      console.error('❌ CLÉ RESEND MANQUANTE OU NON CONFIGURÉE');
+      console.error('🔧 Configurez RESEND_API_KEY dans les variables d\'environnement Vercel');
       return { 
         success: false, 
-        error: 'Clé API Resend non configurée. Ajoutez RESEND_API_KEY dans les variables d\'environnement.' 
+        error: 'Service email non configuré. Contactez l\'administrateur.' 
       };
     }
 
+    // Validation de l'email
     if (!reservation.email) {
-      console.error('Email du client manquant');
+      console.error('❌ Email du client manquant');
       return { success: false, error: 'Email du client manquant' };
     }
 
-    console.log('Clé Resend configurée:', process.env.RESEND_API_KEY ? 'OUI' : 'NON');
-    console.log('Envoi à:', reservation.email);
+    // Validation du format email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(reservation.email)) {
+      console.error('❌ Format d\'email invalide:', reservation.email);
+      return { success: false, error: 'Format d\'email invalide' };
+    }
 
+    console.log('📧 Tentative d\'envoi d\'email à:', reservation.email);
+    console.log('🔑 Clé Resend configurée:', process.env.RESEND_API_KEY ? 'OUI' : 'NON');
+
+    // Génération du PDF
     const pdfBuffer = await generateReservationPDF(reservation);
     
+    // Configuration de l'email avec un domaine vérifié
     const { data, error } = await resend.emails.send({
-      from: 'Confirmation Réservation <onboarding@resend.dev>',
+      // REMPLACEZ "votre-domaine.com" par votre domaine vérifié dans Resend
+      from: 'Réservation Terrains <reservation@votre-domaine.com>',
+      // Pour tester, vous pouvez utiliser votre email vérifié
+      // from: 'Réservation <onboarding@resend.dev>',
       to: [reservation.email],
       subject: `Confirmation de réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
       html: `
@@ -410,22 +426,22 @@ export const sendReservationConfirmation = async (reservation) => {
       `,
       attachments: [
         {
-          filename: `confirmation-reservation-${reservation.id}.pdf`,
+          filename: `confirmation-reservation-${reservation.id || Date.now()}.pdf`,
           content: pdfBuffer.toString('base64'),
         }
       ]
     });
 
     if (error) {
-      console.error('Erreur Resend:', error);
-      return { success: false, error: error.message };
+      console.error('❌ Erreur Resend:', error);
+      return { success: false, error: `Erreur d'envoi: ${error.message}` };
     }
 
-    console.log('Email envoyé avec succès! ID:', data.id);
+    console.log('✅ Email envoyé avec succès! ID:', data.id);
     return { success: true, messageId: data.id };
     
   } catch (error) {
-    console.error('Erreur critique:', error);
-    return { success: false, error: error.message };
+    console.error('❌ Erreur critique lors de l\'envoi d\'email:', error);
+    return { success: false, error: `Erreur système: ${error.message}` };
   }
 };

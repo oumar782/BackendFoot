@@ -4,7 +4,7 @@ import { sendReservationConfirmation } from '../services/emailService.js';
 
 const router = express.Router();
 
-// 📌 Route pour récupérer les revenus totaux basés sur les réservations confirmées
+// 📌 Route pour récupérer les revenus totaux
 router.get('/revenus-totaux', async (req, res) => {
   try {
     const { periode = 'mois', date_debut, date_fin } = req.query;
@@ -12,7 +12,6 @@ router.get('/revenus-totaux', async (req, res) => {
     let sql = '';
     let params = [];
     
-    // Déterminer la période en fonction du paramètre
     let periodeCondition = '';
     if (date_debut && date_fin) {
       periodeCondition = `AND datereservation BETWEEN $1 AND $2`;
@@ -66,7 +65,7 @@ router.get('/revenus-totaux', async (req, res) => {
   }
 });
 
-// 📌 Route pour les prévisions de revenus (journalier, hebdomadaire, mensuel)
+// 📌 Route pour les prévisions de revenus
 router.get('/previsions/revenus', async (req, res) => {
   try {
     const { type = 'mensuel' } = req.query;
@@ -186,7 +185,6 @@ router.get('/previsions/revenus', async (req, res) => {
 
     const result = await db.query(sql);
 
-    // Calcul des statistiques
     const stats = {
       revenu_total_prevue: result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_prevue), 0),
       reservations_total_prevues: result.rows.reduce((sum, row) => sum + parseInt(row.reservations_prevues), 0),
@@ -216,7 +214,7 @@ router.get('/previsions/revenus', async (req, res) => {
   }
 });
 
-// 📌 Route pour le taux de remplissage (journalier, hebdomadaire, mensuel)
+// 📌 Route pour le taux de remplissage
 router.get('/taux-remplissage', async (req, res) => {
   try {
     const { type = 'mensuel' } = req.query;
@@ -354,7 +352,6 @@ router.get('/taux-remplissage', async (req, res) => {
 
     const result = await db.query(sql);
 
-    // Calcul des statistiques
     const stats = {
       taux_remplissage_moyen: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.taux_remplissage), 0) / result.rows.length),
       periode_max_remplissage: result.rows.reduce((max, row) => parseFloat(row.taux_remplissage) > parseFloat(max.taux_remplissage) ? row : max, result.rows[0]),
@@ -386,7 +383,6 @@ router.get('/taux-remplissage', async (req, res) => {
 // 📌 Route pour les statistiques en temps réel
 router.get('/statistiques-temps-reel', async (req, res) => {
   try {
-    // Nombre de terrains occupés en ce moment
     const terrainsOccupesSql = `
       SELECT COUNT(DISTINCT numeroterrain) AS terrains_occupes_actuels
       FROM reservation 
@@ -396,7 +392,6 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         AND heurefin >= CURRENT_TIME
     `;
 
-    // Nombre d'annulations dans la semaine
     const annulationsSemaineSql = `
       SELECT COUNT(*) AS annulations_semaine
       FROM reservation 
@@ -404,7 +399,6 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
     `;
 
-    // Total des terrains actifs dans la semaine
     const terrainsActifsSql = `
       SELECT COUNT(DISTINCT numeroterrain) AS terrains_actifs_semaine
       FROM reservation 
@@ -412,7 +406,6 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
     `;
 
-    // Réservations confirmées aujourd'hui
     const reservationsAujourdhuiSql = `
       SELECT COUNT(*) AS reservations_aujourdhui,
              COALESCE(SUM(tarif), 0) AS revenu_aujourdhui
@@ -421,7 +414,6 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         AND datereservation = CURRENT_DATE
     `;
 
-    // Exécution de toutes les requêtes en parallèle
     const [
       terrainsOccupesResult,
       annulationsResult,
@@ -497,7 +489,6 @@ router.get('/previsions/occupation', async (req, res) => {
 
     const result = await db.query(sql, top ? [parseInt(top)] : []);
 
-    // Calculer les statistiques globales
     const stats = {
       moyenne_occupation: 0,
       jour_plus_charge: null,
@@ -596,7 +587,6 @@ router.get('/previsions/detaillees', async (req, res) => {
 
     const result = await db.query(sql);
 
-    // Générer des données pour tous les jours de la période (même ceux sans réservations)
     const today = new Date();
     const dateFin = new Date(today);
     dateFin.setDate(today.getDate() + joursNumber);
@@ -627,7 +617,7 @@ router.get('/previsions/detaillees', async (req, res) => {
           jour_semaine: jourSemaine,
           niveau_occupation: 'Faible',
           nb_terrains_utilises: 0,
-          heures_disponibles: 12, // Par défaut 1 terrain disponible 12h
+          heures_disponibles: 12,
           terrains_types: 'Aucun'
         });
       }
@@ -635,7 +625,6 @@ router.get('/previsions/detaillees', async (req, res) => {
       dateCourante.setDate(dateCourante.getDate() + 1);
     }
 
-    // Calcul des statistiques avancées
     const stats = {
       moyenne_occupation: Math.round(
         toutesLesDates.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / toutesLesDates.length
@@ -707,13 +696,11 @@ router.get('/', async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    // Filtre par clientId (prioritaire, pour les clients)
     if (clientId) {
       paramCount++;
       sql += ` AND idclient = $${paramCount}`;
       params.push(clientId);
     } else {
-      // Filtres admin
       if (nom) {
         paramCount++;
         sql += ` AND nomclient ILIKE $${paramCount}`;
@@ -851,32 +838,35 @@ router.post('/', async (req, res) => {
     ];
 
     const result = await db.query(sql, params);
+    const newReservation = result.rows[0];
 
-    // ENVOYER L'EMAIL À TOUT UTILISATEUR DONT L'EMAIL EST DANS LA RÉSERVATION
+    // ENVOYER L'EMAIL DE CONFIRMATION SI LE STATUT EST "CONFIRMÉE" ET QU'IL Y A UN EMAIL
     let emailSent = false;
     let emailError = null;
     
     if (statut === 'confirmée' && email) {
       try {
-        const emailResult = await sendReservationConfirmation(result.rows[0]);
+        console.log(`📧 Tentative d'envoi d'email de confirmation à: ${email}`);
+        
+        const emailResult = await sendReservationConfirmation(newReservation);
         
         if (emailResult.success) {
           emailSent = true;
-          console.log('✅ Email de confirmation envoyé avec succès à:', email);
+          console.log('✅ Email envoyé avec succès! ID:', emailResult.messageId);
         } else {
           emailError = emailResult.error;
-          console.error('❌ Erreur envoi email:', emailError);
+          console.error('❌ Erreur lors de l\'envoi de l\'email:', emailError);
         }
-      } catch (emailError) {
-        console.error('❌ Erreur envoi email:', emailError);
-        emailError = emailError.message;
+      } catch (error) {
+        emailError = error.message;
+        console.error('❌ Erreur critique lors de l\'envoi d\'email:', error);
       }
     }
 
     res.status(201).json({
       success: true,
       message: 'Réservation créée avec succès.' + (emailSent ? ' Email de confirmation envoyé.' : ''),
-      data: result.rows[0],
+      data: newReservation,
       emailSent: emailSent,
       emailError: emailError
     });
@@ -918,9 +908,16 @@ router.put('/:id', async (req, res) => {
       [id]
     );
 
+    if (oldReservationResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Réservation non trouvée.'
+      });
+    }
+
     const oldReservation = oldReservationResult.rows[0];
-    const oldStatus = oldReservation ? oldReservation.statut : null;
-    const oldEmail = oldReservation ? oldReservation.email : null;
+    const oldStatus = oldReservation.statut;
+    const oldEmail = oldReservation.email;
 
     const sql = `
       UPDATE reservation 
@@ -950,20 +947,12 @@ router.put('/:id', async (req, res) => {
 
     const result = await db.query(sql, params);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Réservation non trouvée.'
-      });
-    }
-
     const updatedReservation = result.rows[0];
 
     // ENVOYER L'EMAIL SI LE STATUT EST PASSÉ À "CONFIRMÉE" ET QU'IL Y A UN EMAIL
     let emailSent = false;
     let emailError = null;
     
-    // Vérifier si le statut est passé à "confirmée" et qu'il y a un email
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasEmail = email && email.trim() !== '';
     
@@ -975,14 +964,14 @@ router.put('/:id', async (req, res) => {
         
         if (emailResult.success) {
           emailSent = true;
-          console.log('✅ Email envoyé avec succès via Resend');
+          console.log('✅ Email envoyé avec succès! ID:', emailResult.messageId);
         } else {
           emailError = emailResult.error;
-          console.error('❌ Erreur Resend:', emailError);
+          console.error('❌ Erreur lors de l\'envoi de l\'email:', emailError);
         }
       } catch (error) {
         emailError = error.message;
-        console.error('❌ Erreur envoi email:', error);
+        console.error('❌ Erreur critique lors de l\'envoi d\'email:', error);
       }
     }
 
@@ -1038,7 +1027,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour le statut d'une réservation (AVEC RESEND)
+// 📌 Route pour mettre à jour le statut d'une réservation
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1079,11 +1068,10 @@ router.put('/:id/statut', async (req, res) => {
 
     const reservation = result.rows[0];
 
-    // ENVOYER L'EMAIL À TOUT UTILISATEUR DONT L'EMAIL EST DANS LA RÉSERVATION
+    // ENVOYER L'EMAIL SI LE STATUT EST PASSÉ À "CONFIRMÉE" ET QU'IL Y A UN EMAIL
     let emailSent = false;
     let emailError = null;
     
-    // Vérifier si le statut est passé à "confirmée" et qu'il y a un email
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasEmail = reservation.email && reservation.email.trim() !== '';
     
@@ -1095,14 +1083,14 @@ router.put('/:id/statut', async (req, res) => {
         
         if (emailResult.success) {
           emailSent = true;
-          console.log('✅ Email envoyé avec succès via Resend');
+          console.log('✅ Email envoyé avec succès! ID:', emailResult.messageId);
         } else {
           emailError = emailResult.error;
-          console.error('❌ Erreur Resend:', emailError);
+          console.error('❌ Erreur lors de l\'envoi de l\'email:', emailError);
         }
       } catch (error) {
         emailError = error.message;
-        console.error('❌ Erreur envoi email:', error);
+        console.error('❌ Erreur critique lors de l\'envoi d\'email:', error);
       }
     }
 
