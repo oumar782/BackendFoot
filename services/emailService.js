@@ -1,8 +1,8 @@
 import { Resend } from 'resend';
 import PDFDocument from 'pdfkit';
 
-// Initialisation de Resend avec la clé API
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialisation de Resend avec votre clé API
+const resend = new Resend('re_RoP7fY1h_3rKnHXXL3Rg8drsw1SQAYBwD');
 
 const generateReservationPDF = (reservation) => {
   return new Promise((resolve, reject) => {
@@ -158,15 +158,8 @@ const generateReservationPDF = (reservation) => {
 
 export const sendReservationConfirmation = async (reservation) => {
   try {
-    // Vérification plus robuste de la clé API
-    if (!process.env.RESEND_API_KEY || process.env.RESEND_API_KEY === 'your_resend_api_key_here') {
-      console.error('❌ CLÉ RESEND MANQUANTE OU NON CONFIGURÉE');
-      console.error('🔧 Configurez RESEND_API_KEY dans les variables d\'environnement Vercel');
-      return { 
-        success: false, 
-        error: 'Service email non configuré. Contactez l\'administrateur.' 
-      };
-    }
+    console.log('📧 Début de l\'envoi d\'email...');
+    console.log('🔑 Clé Resend:', process.env.RESEND_API_KEY ? 'PRÉSENTE' : 'ABSENTE');
 
     // Validation de l'email
     if (!reservation.email) {
@@ -181,19 +174,19 @@ export const sendReservationConfirmation = async (reservation) => {
       return { success: false, error: 'Format d\'email invalide' };
     }
 
-    console.log('📧 Tentative d\'envoi d\'email à:', reservation.email);
-    console.log('🔑 Clé Resend configurée:', process.env.RESEND_API_KEY ? 'OUI' : 'NON');
+    console.log('✅ Email valide:', reservation.email);
 
     // Génération du PDF
+    console.log('📄 Génération du PDF...');
     const pdfBuffer = await generateReservationPDF(reservation);
+    console.log('✅ PDF généré avec succès');
     
-    // Configuration de l'email avec un domaine vérifié
+    // Configuration de l'email
+    console.log('🚀 Envoi via Resend...');
     const { data, error } = await resend.emails.send({
-      // REMPLACEZ "votre-domaine.com" par votre domaine vérifié dans Resend
-      from: 'Réservation Terrains <reservation@votre-domaine.com>',
-      // Pour tester, vous pouvez utiliser votre email vérifié
-      // from: 'Réservation <onboarding@resend.dev>',
+      from: 'FootSpace Réservation <onboarding@resend.dev>',
       to: [reservation.email],
+      replyTo: 'contact@footspace.com',
       subject: `Confirmation de réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
       html: `
         <!DOCTYPE html>
@@ -418,7 +411,8 @@ export const sendReservationConfirmation = async (reservation) => {
                 
                 <div class="footer">
                     <p>Cordialement,</p>
-                    <p class="company">Équipe Terrains de Football</p>
+                    <p class="company">Équipe FootSpace - Terrains de Football</p>
+                    <p>📞 01 23 45 67 89 | ✉️ contact@footspace.com</p>
                 </div>
             </div>
         </body>
