@@ -158,8 +158,8 @@ const generateReservationPDF = (reservation) => {
 
 export const sendReservationConfirmation = async (reservation) => {
   try {
-    console.log('📧 Début de l\'envoi d\'email...');
-    console.log('🔑 Clé Resend:', process.env.RESEND_API_KEY ? 'PRÉSENTE' : 'ABSENTE');
+    console.log('📧 DÉBUT ENVOI EMAIL PRODUCTION');
+    console.log('📍 Destinataire:', reservation.email);
 
     // Validation de l'email
     if (!reservation.email) {
@@ -174,20 +174,19 @@ export const sendReservationConfirmation = async (reservation) => {
       return { success: false, error: 'Format d\'email invalide' };
     }
 
-    console.log('✅ Email valide:', reservation.email);
+    console.log('✅ Email valide, génération PDF...');
 
     // Génération du PDF
-    console.log('📄 Génération du PDF...');
     const pdfBuffer = await generateReservationPDF(reservation);
-    console.log('✅ PDF généré avec succès');
+    console.log('✅ PDF généré');
     
-    // Configuration de l'email
-    console.log('🚀 Envoi via Resend...');
+    // ENVOI RÉEL EN PRODUCTION - TOUS LES EMAILS AUTORISÉS
+    console.log('🚀 ENVOI RÉEL VIA RESEND...');
     const { data, error } = await resend.emails.send({
       from: 'FootSpace Réservation <onboarding@resend.dev>',
       to: [reservation.email],
-      replyTo: 'contact@footspace.com',
-      subject: `Confirmation de réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
+      replyTo: 'oumardiane399@gmail.com',
+      subject: `Confirmation Réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -412,7 +411,7 @@ export const sendReservationConfirmation = async (reservation) => {
                 <div class="footer">
                     <p>Cordialement,</p>
                     <p class="company">Équipe FootSpace - Terrains de Football</p>
-                    <p>📞 01 23 45 67 89 | ✉️ contact@footspace.com</p>
+                    <p>📞 01 23 45 67 89 | ✉️ oumardiane399@gmail.com</p>
                 </div>
             </div>
         </body>
@@ -427,15 +426,33 @@ export const sendReservationConfirmation = async (reservation) => {
     });
 
     if (error) {
-      console.error('❌ Erreur Resend:', error);
+      console.error('❌ ERREUR RESEND:', error);
       return { success: false, error: `Erreur d'envoi: ${error.message}` };
     }
 
-    console.log('✅ Email envoyé avec succès! ID:', data.id);
+    console.log('✅ EMAIL ENVOYÉ AVEC SUCCÈS! ID:', data.id);
     return { success: true, messageId: data.id };
     
   } catch (error) {
-    console.error('❌ Erreur critique lors de l\'envoi d\'email:', error);
+    console.error('❌ ERREUR CRITIQUE:', error);
     return { success: false, error: `Erreur système: ${error.message}` };
+  }
+};
+
+// Fonction pour envoyer des emails à n'importe qui
+export const sendEmailToAnyone = async (to, subject, html, attachments = []) => {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: 'FootSpace Réservation <onboarding@resend.dev>',
+      to: [to],
+      subject: subject,
+      html: html,
+      attachments: attachments
+    });
+
+    if (error) throw error;
+    return { success: true, messageId: data.id };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 };
