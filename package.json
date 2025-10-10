@@ -16,6 +16,7 @@
     "axios": "^1.12.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
+    "emailjs": "^4.0.3",
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
     "git-filter-repo": "^0.0.30",
