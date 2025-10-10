@@ -7,31 +7,33 @@ const router = express.Router();
 // CREATE - Créer une nouvelle entrée calendrier
 router.post("/", async (req, res) => {
     const {
-        date,
-        nomterrain,
-        statut,
-        periode  // ✅ Ajouté ici
+        date_debut,
+        heure_debut,
+        date_fin,
+        heure_fin,
+        nom_terrain
     } = req.body;
 
     // Validation des champs requis
-    if (!date) {
+    if (!date_debut || !date_fin || !heure_fin || !nom_terrain) {
         return res.status(400).json({
             success: false,
-            message: "Le champ date est obligatoire"
+            message: "Les champs date_debut, date_fin, heure_fin et nom_terrain sont obligatoires"
         });
     }
 
     try {
         const result = await pool.query(
             `INSERT INTO calendriers 
-             (date, nomterrain, statut, periode) 
-             VALUES ($1, $2, $3, $4) 
+             (date_debut, heure_debut, date_fin, heure_fin, nom_terrain) 
+             VALUES ($1, $2, $3, $4, $5) 
              RETURNING *`,
             [
-                date,
-                nomterrain || null,
-                statut || 'disponible',  // ✅ Valeur par défaut
-                periode || 'matin'       // ✅ Valeur par défaut pour periode
+                date_debut,
+                heure_debut || '09:00',  // Valeur par défaut
+                date_fin,
+                heure_fin,
+                nom_terrain
             ]
         );
 
@@ -57,7 +59,7 @@ router.post("/", async (req, res) => {
 router.get("/", async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT * FROM calendriers ORDER BY date DESC"
+            "SELECT * FROM calendriers ORDER BY date_debut DESC, heure_debut DESC"
         );
         
         res.json({
@@ -106,14 +108,14 @@ router.get("/:id", async (req, res) => {
     }
 });
 
-// READ - Récupérer les entrées calendrier par date
-router.get("/date/:date", async (req, res) => {
-    const date = req.params.date;
+// READ - Récupérer les entrées calendrier par date de début
+router.get("/date-debut/:date_debut", async (req, res) => {
+    const date_debut = req.params.date_debut;
     
     try {
         const result = await pool.query(
-            "SELECT * FROM calendriers WHERE date = $1 ORDER BY id",
-            [date]
+            "SELECT * FROM calendriers WHERE date_debut = $1 ORDER BY heure_debut",
+            [date_debut]
         );
 
         res.json({
@@ -122,23 +124,23 @@ router.get("/date/:date", async (req, res) => {
             data: result.rows
         });
     } catch (err) {
-        console.error("❌ Erreur lors de la récupération par date:", err.message);
+        console.error("❌ Erreur lors de la récupération par date de début:", err.message);
         res.status(500).json({
             success: false,
-            message: "Erreur serveur lors de la récupération par date",
+            message: "Erreur serveur lors de la récupération par date de début",
             error: err.message
         });
     }
 });
 
 // READ - Récupérer les entrées calendrier par nom de terrain
-router.get("/terrain/:nomterrain", async (req, res) => {
-    const nomterrain = req.params.nomterrain;
+router.get("/terrain/:nom_terrain", async (req, res) => {
+    const nom_terrain = req.params.nom_terrain;
     
     try {
         const result = await pool.query(
-            "SELECT * FROM calendriers WHERE nomterrain = $1 ORDER BY date DESC",
-            [nomterrain]
+            "SELECT * FROM calendriers WHERE nom_terrain = $1 ORDER BY date_debut DESC, heure_debut DESC",
+            [nom_terrain]
         );
 
         res.json({
@@ -160,31 +162,33 @@ router.get("/terrain/:nomterrain", async (req, res) => {
 router.put("/:id", async (req, res) => {
     const id = req.params.id;
     const {
-        date,
-        nomterrain,
-        statut,
-        periode  // ✅ Ajouté ici
+        date_debut,
+        heure_debut,
+        date_fin,
+        heure_fin,
+        nom_terrain
     } = req.body;
 
     // Validation des champs requis
-    if (!date) {
+    if (!date_debut || !date_fin || !heure_fin || !nom_terrain) {
         return res.status(400).json({
             success: false,
-            message: "Le champ date est obligatoire"
+            message: "Les champs date_debut, date_fin, heure_fin et nom_terrain sont obligatoires"
         });
     }
 
     try {
         const result = await pool.query(
             `UPDATE calendriers 
-             SET date = $1, nomterrain = $2, statut = $3, periode = $4
-             WHERE id = $5 
+             SET date_debut = $1, heure_debut = $2, date_fin = $3, heure_fin = $4, nom_terrain = $5
+             WHERE id = $6 
              RETURNING *`,
             [
-                date,
-                nomterrain || null,
-                statut || 'disponible',
-                periode || 'matin',  // ✅ Valeur par défaut
+                date_debut,
+                heure_debut || '09:00',
+                date_fin,
+                heure_fin,
+                nom_terrain,
                 id
             ]
         );
@@ -249,14 +253,14 @@ router.delete("/:id", async (req, res) => {
     }
 });
 
-// DELETE - Supprimer les entrées calendrier par date
-router.delete("/date/:date", async (req, res) => {
-    const date = req.params.date;
+// DELETE - Supprimer les entrées calendrier par date de début
+router.delete("/date-debut/:date_debut", async (req, res) => {
+    const date_debut = req.params.date_debut;
 
     try {
         const result = await pool.query(
-            "DELETE FROM calendriers WHERE date = $1 RETURNING *",
-            [date]
+            "DELETE FROM calendriers WHERE date_debut = $1 RETURNING *",
+            [date_debut]
         );
 
         res.json({
@@ -266,11 +270,11 @@ router.delete("/date/:date", async (req, res) => {
             data: result.rows
         });
     } catch (err) {
-        console.error("❌ Erreur lors de la suppression par date:", err.message);
+        console.error("❌ Erreur lors de la suppression par date de début:", err.message);
         
         res.status(500).json({
             success: false,
-            message: "Erreur serveur lors de la suppression par date",
+            message: "Erreur serveur lors de la suppression par date de début",
             error: err.message
         });
     }
@@ -282,7 +286,10 @@ router.get("/plage/:startDate/:endDate", async (req, res) => {
     
     try {
         const result = await pool.query(
-            "SELECT * FROM calendriers WHERE date BETWEEN $1 AND $2 ORDER BY date",
+            `SELECT * FROM calendriers 
+             WHERE date_debut BETWEEN $1 AND $2 
+             OR date_fin BETWEEN $1 AND $2
+             ORDER BY date_debut, heure_debut`,
             [startDate, endDate]
         );
 
@@ -301,16 +308,77 @@ router.get("/plage/:startDate/:endDate", async (req, res) => {
     }
 });
 
+// GET - Récupérer les créneaux disponibles pour un terrain et une date
+router.get("/disponibilites/:nom_terrain/:date", async (req, res) => {
+    const { nom_terrain, date } = req.params;
+    
+    try {
+        const result = await pool.query(
+            `SELECT * FROM calendriers 
+             WHERE nom_terrain = $1 
+             AND date_debut = $2
+             ORDER BY heure_debut`,
+            [nom_terrain, date]
+        );
+
+        res.json({
+            success: true,
+            count: result.rows.length,
+            data: result.rows
+        });
+    } catch (err) {
+        console.error("❌ Erreur lors de la récupération des disponibilités:", err.message);
+        res.status(500).json({
+            success: false,
+            message: "Erreur serveur lors de la récupération des disponibilités",
+            error: err.message
+        });
+    }
+});
+
+// GET - Vérifier les conflits de réservation
+router.get("/conflits/:nom_terrain/:date_debut/:heure_debut/:date_fin/:heure_fin", async (req, res) => {
+    const { nom_terrain, date_debut, heure_debut, date_fin, heure_fin } = req.params;
+    
+    try {
+        const result = await pool.query(
+            `SELECT * FROM calendriers 
+             WHERE nom_terrain = $1 
+             AND (
+                 (date_debut = $2 AND heure_debut < $4) OR
+                 (date_fin = $3 AND heure_fin > $5) OR
+                 (date_debut BETWEEN $2 AND $3)
+             )
+             AND id != COALESCE($6, -1)`,
+            [nom_terrain, date_debut, date_fin, heure_fin, heure_debut, req.query.exclude_id || -1]
+        );
+
+        res.json({
+            success: true,
+            hasConflit: result.rows.length > 0,
+            count: result.rows.length,
+            data: result.rows
+        });
+    } catch (err) {
+        console.error("❌ Erreur lors de la vérification des conflits:", err.message);
+        res.status(500).json({
+            success: false,
+            message: "Erreur serveur lors de la vérification des conflits",
+            error: err.message
+        });
+    }
+});
+
 // GET - Statistiques des calendriers
 router.get("/statistiques/overview", async (req, res) => {
     try {
         const stats = await pool.query(`
             SELECT 
                 COUNT(*) as total_entrees,
-                COUNT(DISTINCT date) as jours_uniques,
-                COUNT(DISTINCT nomterrain) as terrains_differents,
-                MIN(date) as date_min,
-                MAX(date) as date_max
+                COUNT(DISTINCT date_debut) as jours_debut_uniques,
+                COUNT(DISTINCT nom_terrain) as terrains_differents,
+                MIN(date_debut) as date_min,
+                MAX(date_fin) as date_max
             FROM calendriers
         `);
 

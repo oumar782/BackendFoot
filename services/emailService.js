@@ -1,8 +1,13 @@
-import { Resend } from 'resend';
 import PDFDocument from 'pdfkit';
+import emailjs from '@emailjs/nodejs';
 
-// Initialisation de Resend avec votre clé API
-const resend = new Resend('re_RoP7fY1h_3rKnHXXL3Rg8drsw1SQAYBwD');
+// Configuration EmailJS - AVEC VOS CLÉS
+const EMAILJS_CONFIG = {
+  serviceId: 'service_9cd5nin',
+  templateId: 'template_l71wb4o', 
+  publicKey: '4ouSFo0CcZLfJLizR',
+  privateKey: '3XnlabANVMe6SicjAJ56g'
+};
 
 const generateReservationPDF = (reservation) => {
   return new Promise((resolve, reject) => {
@@ -158,7 +163,7 @@ const generateReservationPDF = (reservation) => {
 
 export const sendReservationConfirmation = async (reservation) => {
   try {
-    console.log('📧 DÉBUT ENVOI EMAIL PRODUCTION');
+    console.log('🎯 DÉBUT ENVOI EMAIL PRODUCTION');
     console.log('📍 Destinataire:', reservation.email);
 
     // Validation de l'email
@@ -167,7 +172,6 @@ export const sendReservationConfirmation = async (reservation) => {
       return { success: false, error: 'Email du client manquant' };
     }
 
-    // Validation du format email
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(reservation.email)) {
       console.error('❌ Format d\'email invalide:', reservation.email);
@@ -178,280 +182,137 @@ export const sendReservationConfirmation = async (reservation) => {
 
     // Génération du PDF
     const pdfBuffer = await generateReservationPDF(reservation);
-    console.log('✅ PDF généré');
-    
-    // ENVOI RÉEL EN PRODUCTION - TOUS LES EMAILS AUTORISÉS
-    console.log('🚀 ENVOI RÉEL VIA RESEND...');
-    const { data, error } = await resend.emails.send({
-      from: 'FootSpace Réservation <onboarding@resend.dev>',
-      to: [reservation.email],
-      replyTo: 'oumardiane399@gmail.com',
-      subject: `Confirmation Réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`,
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { 
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-                    line-height: 1.6; 
-                    color: #2C3E50; 
-                    background-color: #F5F7FA;
-                }
-                .email-container { 
-                    max-width: 600px; 
-                    margin: 40px auto; 
-                    background: #FFFFFF;
-                    border-radius: 12px;
-                    overflow: hidden;
-                    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-                }
-                .header { 
-                    background: linear-gradient(135deg, #2C3E50 0%, #34495E 100%);
-                    color: white; 
-                    padding: 50px 40px;
-                    text-align: center;
-                }
-                .header h1 { 
-                    font-size: 28px;
-                    font-weight: 600;
-                    letter-spacing: 0.5px;
-                    margin: 0;
-                }
-                .header p {
-                    margin-top: 10px;
-                    font-size: 14px;
-                    opacity: 0.9;
-                }
-                .content { 
-                    padding: 40px;
-                }
-                .greeting {
-                    font-size: 16px;
-                    margin-bottom: 20px;
-                    color: #2C3E50;
-                }
-                .greeting .name {
-                    font-weight: 600;
-                    color: #27AE60;
-                }
-                .message {
-                    font-size: 15px;
-                    color: #5D6D7E;
-                    margin-bottom: 30px;
-                    line-height: 1.8;
-                }
-                .details-box { 
-                    background: #F8F9FA;
-                    border-left: 4px solid #27AE60;
-                    padding: 30px;
-                    margin: 30px 0;
-                    border-radius: 8px;
-                }
-                .details-box h2 {
-                    font-size: 18px;
-                    margin-bottom: 20px;
-                    color: #2C3E50;
-                    font-weight: 600;
-                }
-                .detail-row {
-                    display: table;
-                    width: 100%;
-                    padding: 12px 0;
-                    border-bottom: 1px solid #E8EBED;
-                }
-                .detail-row:last-child {
-                    border-bottom: none;
-                }
-                .detail-label {
-                    display: table-cell;
-                    font-size: 13px;
-                    color: #7F8C8D;
-                    font-weight: 500;
-                    text-transform: uppercase;
-                    letter-spacing: 0.5px;
-                }
-                .detail-value {
-                    display: table-cell;
-                    text-align: right;
-                    font-size: 15px;
-                    color: #2C3E50;
-                    font-weight: 600;
-                }
-                .tarif-box {
-                    background: linear-gradient(135deg, #27AE60 0%, #229954 100%);
-                    color: white;
-                    padding: 25px 30px;
-                    margin: 30px 0;
-                    border-radius: 8px;
-                    text-align: center;
-                }
-                .tarif-box .label {
-                    font-size: 12px;
-                    text-transform: uppercase;
-                    letter-spacing: 1px;
-                    opacity: 0.9;
-                    margin-bottom: 8px;
-                }
-                .tarif-box .amount {
-                    font-size: 32px;
-                    font-weight: 700;
-                    letter-spacing: 1px;
-                }
-                .important-note {
-                    background: #FFF3CD;
-                    border-left: 4px solid #FFC107;
-                    padding: 20px;
-                    margin: 25px 0;
-                    border-radius: 8px;
-                }
-                .important-note p {
-                    margin: 0;
-                    color: #856404;
-                    font-size: 14px;
-                    line-height: 1.6;
-                }
-                .important-note strong {
-                    display: block;
-                    margin-bottom: 8px;
-                    font-size: 15px;
-                }
-                .footer { 
-                    background: #F8F9FA;
-                    padding: 30px 40px;
-                    text-align: center;
-                    border-top: 1px solid #E8EBED;
-                }
-                .footer p {
-                    margin: 8px 0;
-                    font-size: 14px;
-                    color: #7F8C8D;
-                }
-                .footer .company {
-                    font-weight: 600;
-                    color: #2C3E50;
-                    font-size: 15px;
-                }
-                @media only screen and (max-width: 600px) {
-                    .email-container { margin: 20px; }
-                    .header { padding: 30px 20px; }
-                    .content { padding: 25px 20px; }
-                    .details-box { padding: 20px; }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="email-container">
-                <div class="header">
-                    <h1>CONFIRMATION DE RÉSERVATION</h1>
-                    <p>Votre réservation a été confirmée avec succès</p>
-                </div>
-                
-                <div class="content">
-                    <p class="greeting">
-                        Bonjour <span class="name">${reservation.prenom} ${reservation.nomclient}</span>,
-                    </p>
-                    
-                    <p class="message">
-                        Nous avons le plaisir de confirmer votre réservation. Vous trouverez ci-dessous tous les détails concernant votre réservation ainsi qu'une confirmation officielle en pièce jointe au format PDF.
-                    </p>
-                    
-                    <div class="details-box">
-                        <h2>Détails de votre réservation</h2>
-                        
-                        <div class="detail-row">
-                            <span class="detail-label">Terrain</span>
-                            <span class="detail-value">${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}</span>
-                        </div>
-                        
-                        <div class="detail-row">
-                            <span class="detail-label">Numéro</span>
-                            <span class="detail-value">${reservation.numeroterrain}</span>
-                        </div>
-                        
-                        <div class="detail-row">
-                            <span class="detail-label">Type de terrain</span>
-                            <span class="detail-value">${reservation.typeterrain || 'Non spécifié'}</span>
-                        </div>
-                        
-                        <div class="detail-row">
-                            <span class="detail-label">Date</span>
-                            <span class="detail-value">${new Date(reservation.datereservation).toLocaleDateString('fr-FR', { 
-                                weekday: 'long', 
-                                year: 'numeric', 
-                                month: 'long', 
-                                day: 'numeric' 
-                            })}</span>
-                        </div>
-                        
-                        <div class="detail-row">
-                            <span class="detail-label">Horaire</span>
-                            <span class="detail-value">${reservation.heurereservation} - ${reservation.heurefin}</span>
-                        </div>
-                        
-                        <div class="detail-row">
-                            <span class="detail-label">Statut</span>
-                            <span class="detail-value">${reservation.statut}</span>
-                        </div>
-                    </div>
-                    
-                    <div class="tarif-box">
-                        <div class="label">Tarif total</div>
-                        <div class="amount">${reservation.tarif || '0'} Dh</div>
-                    </div>
-                    
-                    <div class="important-note">
-                        <p><strong>Important</strong> Veuillez présenter cette confirmation lors de votre arrivée. Nous vous recommandons d'arriver quelques minutes avant l'heure prévue.</p>
-                    </div>
-                </div>
-                
-                <div class="footer">
-                    <p>Cordialement,</p>
-                    <p class="company">Équipe FootSpace - Terrains de Football</p>
-                    <p>📞 01 23 45 67 89 | ✉️ oumardiane399@gmail.com</p>
-                </div>
-            </div>
-        </body>
-        </html>
-      `,
-      attachments: [
-        {
-          filename: `confirmation-reservation-${reservation.id || Date.now()}.pdf`,
-          content: pdfBuffer.toString('base64'),
-        }
-      ]
+    console.log('✅ PDF généré avec succès');
+
+    // Données pour le template EmailJS
+    const templateParams = {
+      to_email: reservation.email,
+      client_name: `${reservation.prenom} ${reservation.nomclient}`,
+      terrain_name: reservation.nomterrain || 'Terrain ' + reservation.numeroterrain,
+      terrain_number: reservation.numeroterrain,
+      terrain_type: reservation.typeterrain || 'Non spécifié',
+      reservation_date: new Date(reservation.datereservation).toLocaleDateString('fr-FR', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      }),
+      reservation_time: `${reservation.heurereservation} - ${reservation.heurefin}`,
+      tarif: `${reservation.tarif || '0'} Dh`,
+      telephone: reservation.telephone,
+      from_name: 'FootSpace Réservation',
+      reservation_id: reservation.id || 'N/A'
+    };
+
+    console.log('🚀 ENVOI AVEC EMAILJS...');
+    console.log('📋 Paramètres template:', {
+      to_email: templateParams.to_email,
+      client_name: templateParams.client_name,
+      terrain_name: templateParams.terrain_name
     });
+    
+    // ENVOI RÉEL AVEC EMAILJS
+    const result = await emailjs.send(
+      EMAILJS_CONFIG.serviceId,
+      EMAILJS_CONFIG.templateId,
+      templateParams,
+      {
+        publicKey: EMAILJS_CONFIG.publicKey,
+        privateKey: EMAILJS_CONFIG.privateKey
+      }
+    );
 
-    if (error) {
-      console.error('❌ ERREUR RESEND:', error);
-      return { success: false, error: `Erreur d'envoi: ${error.message}` };
-    }
-
-    console.log('✅ EMAIL ENVOYÉ AVEC SUCCÈS! ID:', data.id);
-    return { success: true, messageId: data.id };
+    console.log('✅ EMAIL ENVOYÉ AVEC SUCCÈS! ID:', result.messageId);
+    return { success: true, messageId: result.messageId };
     
   } catch (error) {
-    console.error('❌ ERREUR CRITIQUE:', error);
-    return { success: false, error: `Erreur système: ${error.message}` };
+    console.error('❌ ERREUR EMAILJS:', error);
+    
+    // Log détaillé de l'erreur
+    if (error.response) {
+      console.error('📧 Détails erreur EmailJS:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+    }
+    
+    return { 
+      success: false, 
+      error: `Erreur d'envoi: ${error.message}`,
+      details: error.response?.data || 'Aucun détail supplémentaire'
+    };
   }
 };
 
-// Fonction pour envoyer des emails à n'importe qui
-export const sendEmailToAnyone = async (to, subject, html, attachments = []) => {
+// Fonction pour vérifier la configuration EmailJS
+export const checkEmailConfiguration = async () => {
   try {
-    const { data, error } = await resend.emails.send({
-      from: 'FootSpace Réservation <onboarding@resend.dev>',
-      to: [to],
-      subject: subject,
-      html: html,
-      attachments: attachments
-    });
+    // Test simple de connexion à EmailJS
+    const testParams = {
+      to_email: 'test@example.com',
+      client_name: 'Test Configuration',
+      terrain_name: 'Terrain Test',
+      terrain_number: '1',
+      terrain_type: 'Synthétique',
+      reservation_date: new Date().toLocaleDateString('fr-FR'),
+      reservation_time: '14:00 - 16:00',
+      tarif: '100 Dh',
+      telephone: '0123456789',
+      from_name: 'FootSpace Test'
+    };
 
-    if (error) throw error;
-    return { success: true, messageId: data.id };
+    await emailjs.send(
+      EMAILJS_CONFIG.serviceId,
+      EMAILJS_CONFIG.templateId,
+      testParams,
+      {
+        publicKey: EMAILJS_CONFIG.publicKey,
+        privateKey: EMAILJS_CONFIG.privateKey
+      }
+    );
+
+    return {
+      status: 'CONFIGURÉ',
+      serviceId: EMAILJS_CONFIG.serviceId ? '✅ PRÉSENT' : '❌ MANQUANT',
+      templateId: EMAILJS_CONFIG.templateId ? '✅ PRÉSENT' : '❌ MANQUANT',
+      publicKey: EMAILJS_CONFIG.publicKey ? '✅ PRÉSENT' : '❌ MANQUANT',
+      privateKey: EMAILJS_CONFIG.privateKey ? '✅ PRÉSENT' : '❌ MANQUANT',
+      message: 'Configuration EmailJS valide'
+    };
+  } catch (error) {
+    return {
+      status: 'ERREUR',
+      serviceId: EMAILJS_CONFIG.serviceId ? '✅ PRÉSENT' : '❌ MANQUANT',
+      templateId: EMAILJS_CONFIG.templateId ? '✅ PRÉSENT' : '❌ MANQUANT',
+      publicKey: EMAILJS_CONFIG.publicKey ? '✅ PRÉSENT' : '❌ MANQUANT',
+      privateKey: EMAILJS_CONFIG.privateKey ? '✅ PRÉSENT' : '❌ MANQUANT',
+      message: `Erreur de configuration: ${error.message}`,
+      error: error.message
+    };
+  }
+};
+
+// Fonction pour envoyer des emails génériques
+export const sendGenericEmail = async (to, subject, message, attachments = []) => {
+  try {
+    const templateParams = {
+      to_email: to,
+      subject: subject,
+      message: message,
+      from_name: 'FootSpace Administration'
+    };
+
+    const result = await emailjs.send(
+      EMAILJS_CONFIG.serviceId,
+      EMAILJS_CONFIG.templateId,
+      templateParams,
+      {
+        publicKey: EMAILJS_CONFIG.publicKey,
+        privateKey: EMAILJS_CONFIG.privateKey
+      }
+    );
+
+    return { success: true, messageId: result.messageId };
   } catch (error) {
     return { success: false, error: error.message };
   }

@@ -1,8 +1,10 @@
 import express from 'express';
 import db from '../db.js';
-import { sendReservationConfirmation } from '../services/emailService.js';
+import { sendReservationConfirmation, checkEmailConfiguration } from '../services/emailService.js';
 
 const router = express.Router();
+
+// 📊 STATISTIQUES ET ANALYTIQUES
 
 // 📌 Route pour récupérer les revenus totaux
 router.get('/revenus-totaux', async (req, res) => {
@@ -39,7 +41,8 @@ router.get('/revenus-totaux', async (req, res) => {
         COUNT(DISTINCT datereservation) AS nb_jours_avec_reservations,
         ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation,
         MAX(tarif) AS revenu_max,
-        MIN(tarif) AS revenu_min
+        MIN(tarif) AS revenu_min,
+        COUNT(DISTINCT idclient) AS nb_clients_uniques
       FROM reservation 
       WHERE statut = 'confirmée'
       ${periodeCondition}
@@ -414,16 +417,27 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         AND datereservation = CURRENT_DATE
     `;
 
+    const reservationsMoisSql = `
+      SELECT COUNT(*) AS reservations_mois,
+             COALESCE(SUM(tarif), 0) AS revenu_mois
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation >= date_trunc('month', CURRENT_DATE)
+        AND datereservation < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+    `;
+
     const [
       terrainsOccupesResult,
       annulationsResult,
       terrainsActifsResult,
-      reservationsAujourdhuiResult
+      reservationsAujourdhuiResult,
+      reservationsMoisResult
     ] = await Promise.all([
       db.query(terrainsOccupesSql),
       db.query(annulationsSemaineSql),
       db.query(terrainsActifsSql),
-      db.query(reservationsAujourdhuiSql)
+      db.query(reservationsAujourdhuiSql),
+      db.query(reservationsMoisSql)
     ]);
 
     const stats = {
@@ -432,6 +446,8 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       terrains_actifs_semaine: terrainsActifsResult.rows[0]?.terrains_actifs_semaine || 0,
       reservations_aujourdhui: reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui || 0,
       revenu_aujourdhui: reservationsAujourdhuiResult.rows[0]?.revenu_aujourdhui || 0,
+      reservations_mois: reservationsMoisResult.rows[0]?.reservations_mois || 0,
+      revenu_mois: reservationsMoisResult.rows[0]?.revenu_mois || 0,
       date_actualisation: new Date().toISOString()
     };
 
@@ -667,10 +683,87 @@ router.get('/previsions/detaillees', async (req, res) => {
   }
 });
 
+// 📧 GESTION DES EMAILS
+
+// 📌 Route pour vérifier la configuration email
+router.get('/email/config', async (req, res) => {
+  try {
+    const config = await checkEmailConfiguration();
+    
+    res.json({
+      success: true,
+      configuration: config,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la vérification de la configuration email',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour tester l'envoi d'email
+router.post('/email/test', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email de test requis'
+      });
+    }
+
+    const testReservation = {
+      id: 'test-' + Date.now(),
+      datereservation: new Date().toISOString().split('T')[0],
+      heurereservation: '14:00',
+      heurefin: '16:00',
+      statut: 'confirmée',
+      idclient: 1,
+      numeroterrain: 1,
+      nomclient: 'Test',
+      prenom: 'Utilisateur',
+      email: email,
+      telephone: '0123456789',
+      typeterrain: 'Synthétique',
+      tarif: 150,
+      surface: '100m²',
+      nomterrain: 'Stade Principal'
+    };
+
+    console.log('🧪 TEST EMAIL MANUEL vers:', email);
+    const result = await sendReservationConfirmation(testReservation);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 
+        '✅ Email de test envoyé avec succès' : 
+        '❌ Échec de l\'envoi de l\'email',
+      error: result.error,
+      email: email,
+      service: 'EmailJS',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur test email manuel:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors du test d\'email',
+      error: error.message
+    });
+  }
+});
+
+// 🎯 GESTION DES RÉSERVATIONS
+
 // 📌 Route pour récupérer les réservations (avec ou sans filtres)
 router.get('/', async (req, res) => {
   try {
-    const { nom, email, statut, date, clientId } = req.query;
+    const { nom, email, statut, date, clientId, page = 1, limit = 10 } = req.query;
 
     let sql = `
       SELECT 
@@ -688,7 +781,8 @@ router.get('/', async (req, res) => {
         tarif,
         surface,
         heurefin,
-        nomterrain
+        nomterrain,
+        created_at
       FROM reservation 
       WHERE 1=1
     `;
@@ -726,13 +820,24 @@ router.get('/', async (req, res) => {
       params.push(date);
     }
 
-    sql += ` ORDER BY datereservation DESC, heurereservation DESC`;
+    // Comptage total pour la pagination
+    const countSql = `SELECT COUNT(*) as total_count FROM (${sql}) as subquery`;
+    const countResult = await db.query(countSql, params);
+    const totalCount = parseInt(countResult.rows[0].total_count);
+
+    // Pagination
+    const offset = (page - 1) * limit;
+    sql += ` ORDER BY datereservation DESC, heurereservation DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+    params.push(parseInt(limit), offset);
 
     const result = await db.query(sql, params);
 
     res.json({
       success: true,
       count: result.rows.length,
+      total: totalCount,
+      page: parseInt(page),
+      totalPages: Math.ceil(totalCount / limit),
       data: result.rows
     });
 
@@ -767,7 +872,8 @@ router.get('/:id', async (req, res) => {
         tarif,
         surface,
         heurefin,
-        nomterrain
+        nomterrain,
+        created_at
       FROM reservation 
       WHERE numeroreservations = $1
     `;
@@ -935,7 +1041,8 @@ router.put('/:id', async (req, res) => {
         tarif = $11,
         surface = $12,
         heurefin = $13,
-        nomterrain = $14
+        nomterrain = $14,
+        updated_at = CURRENT_TIMESTAMP
       WHERE numeroreservations = $15
       RETURNING numeroreservations as id, *
     `;
@@ -1059,7 +1166,8 @@ router.put('/:id/statut', async (req, res) => {
 
     const sql = `
       UPDATE reservation 
-      SET statut = $1 
+      SET statut = $1,
+          updated_at = CURRENT_TIMESTAMP
       WHERE numeroreservations = $2
       RETURNING numeroreservations as id, *
     `;
@@ -1106,6 +1214,43 @@ router.put('/:id/statut', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour les réservations d'aujourd'hui
+router.get('/aujourd-hui/terrains', async (req, res) => {
+  try {
+    const sql = `
+      SELECT 
+        numeroterrain,
+        nomterrain,
+        COUNT(*) as nb_reservations,
+        STRING_AGG(
+          CONCAT(heurereservation, '-', heurefin, ' (', nomclient, ')'), 
+          ', '
+        ) as creneaux_occupes
+      FROM reservation 
+      WHERE datereservation = CURRENT_DATE 
+        AND statut = 'confirmée'
+      GROUP BY numeroterrain, nomterrain
+      ORDER BY numeroterrain
+    `;
+
+    const result = await db.query(sql);
+
+    res.json({
+      success: true,
+      date: new Date().toISOString().split('T')[0],
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur réservations aujourd\'hui:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
