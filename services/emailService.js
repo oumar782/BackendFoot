@@ -126,12 +126,6 @@ export const sendReservationConfirmation = async (reservation) => {
       subject: `Confirmation de réservation - ${reservation.nomterrain || 'Terrain ' + reservation.numeroterrain}`
     };
 
-    console.log('📤 Tentative d\'envoi via EmailJS...');
-    console.log('📋 Paramètres template:', {
-      to_email: templateParams.to_email,
-      client_name: templateParams.client_name,
-      terrain_name: templateParams.terrain_name
-    });
 
     // ENVOI EMAIL AVEC EMAILJS - AVEC GESTION D'ERREUR DÉTAILLÉE
     const emailResult = await emailjs.send(

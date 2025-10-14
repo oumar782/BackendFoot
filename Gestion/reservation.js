@@ -436,7 +436,7 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       db.query(terrainsOccupesSql),
       db.query(annulationsSemaineSql),
       db.query(terrainsActifsSql),
-      db.query(reservationsAujourdhuiResult),
+      db.query(reservationsAujourdhuiSql),
       db.query(reservationsMoisSql)
     ]);
 
@@ -794,8 +794,7 @@ router.get('/', async (req, res) => {
         tarif,
         surface,
         heurefin,
-        nomterrain,
-        created_at
+        nomterrain
       FROM reservation 
       WHERE 1=1
     `;
@@ -885,8 +884,7 @@ router.get('/:id', async (req, res) => {
         tarif,
         surface,
         heurefin,
-        nomterrain,
-        created_at
+        nomterrain
       FROM reservation 
       WHERE numeroreservations = $1
     `;
@@ -1071,8 +1069,7 @@ router.put('/:id', async (req, res) => {
         tarif = $11,
         surface = $12,
         heurefin = $13,
-        nomterrain = $14,
-        updated_at = CURRENT_TIMESTAMP
+        nomterrain = $14
       WHERE numeroreservations = $15
       RETURNING numeroreservations as id, *
     `;
@@ -1203,8 +1200,7 @@ router.put('/:id/statut', async (req, res) => {
 
     const sql = `
       UPDATE reservation 
-      SET statut = $1,
-          updated_at = CURRENT_TIMESTAMP
+      SET statut = $1
       WHERE numeroreservations = $2
       RETURNING numeroreservations as id, *
     `;
@@ -1303,5 +1299,5 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
     });
   }
 });
-//ddd
+
 export default router;
