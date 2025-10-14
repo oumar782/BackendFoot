@@ -436,7 +436,7 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       db.query(terrainsOccupesSql),
       db.query(annulationsSemaineSql),
       db.query(terrainsActifsSql),
-      db.query(reservationsAujourdhuiSql),
+      db.query(reservationsAujourdhuiResult),
       db.query(reservationsMoisSql)
     ]);
 
