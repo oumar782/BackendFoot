@@ -38,7 +38,6 @@ router.get('/revenus-totaux', async (req, res) => {
         ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation,
         MAX(tarif) AS revenu_max,
         MIN(tarif) AS revenu_min
-        -- ❌ Supprimé: COUNT(DISTINCT idclient) AS nb_clients_uniques
       FROM reservation 
       WHERE statut = 'confirmée'
       ${periodeCondition}
@@ -408,7 +407,7 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       db.query(terrainsOccupesSql),
       db.query(annulationsSemaineSql),
       db.query(terrainsActifsSql),
-      db.query(reservationsAujourdhuiSql),
+      db.query(reservationsAujourdhuiResult),
       db.query(reservationsMoisSql)
     ]);
 
@@ -683,7 +682,6 @@ router.post('/email/test', async (req, res) => {
       heurereservation: '14:00',
       heurefin: '16:00',
       statut: 'confirmée',
-      // ❌ Supprimé: idclient
       numeroterrain: 1,
       nomclient: 'Test',
       prenom: 'Utilisateur',
@@ -728,7 +726,7 @@ router.post('/email/test', async (req, res) => {
 // 📌 Route pour récupérer les réservations (avec ou sans filtres)
 router.get('/', async (req, res) => {
   try {
-    const { nom, email, statut, date, page = 1, limit = 10 } = req.query; // ❌ Supprimé: clientId
+    const { nom, email, statut, date, page = 1, limit = 10 } = req.query;
     let sql = `
       SELECT 
         numeroreservations as id,
@@ -751,7 +749,6 @@ router.get('/', async (req, res) => {
     const params = [];
     let paramCount = 0;
 
-    // ❌ Supprimé le bloc `if (clientId)`
     if (nom) {
       paramCount++;
       sql += ` AND nomclient ILIKE $${paramCount}`;
@@ -865,7 +862,7 @@ router.post('/', async (req, res) => {
       nomterrain
     } = req.body;
 
-    // Validation des champs requis — ❌ idclient supprimé
+    // Validation des champs requis
     if (!datereservation || !heurereservation || !statut || !numeroterrain) {
       return res.status(400).json({
         success: false,
