@@ -1,18 +1,20 @@
 import express from 'express';
 import db from '../db.js';
 import { sendReservationConfirmation, checkEmailConfiguration } from '../services/emailService.js';
+
 const router = express.Router();
 
-// 📊 STATISTIQUES ET ANALYTIQUES AMÉLIORÉES
+// 📊 STATISTIQUES ET ANALYTIQUES
 
 // 📌 Route pour récupérer les revenus totaux
 router.get('/revenus-totaux', async (req, res) => {
   try {
     const { periode = 'mois', date_debut, date_fin } = req.query;
+    
     let sql = '';
     let params = [];
-    let periodeCondition = '';
     
+    let periodeCondition = '';
     if (date_debut && date_fin) {
       periodeCondition = `AND datereservation BETWEEN $1 AND $2`;
       params = [date_debut, date_fin];
@@ -39,34 +41,22 @@ router.get('/revenus-totaux', async (req, res) => {
         COUNT(DISTINCT datereservation) AS nb_jours_avec_reservations,
         ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation,
         MAX(tarif) AS revenu_max,
-        MIN(tarif) AS revenu_min,
-        COUNT(DISTINCT email) AS nb_clients_uniques,
-        COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
-        ROUND(COUNT(*) * 100.0 / NULLIF(COUNT(DISTINCT datereservation) * 8, 0), 2) AS taux_occupation_global
+        MIN(tarif) AS revenu_min
       FROM reservation 
       WHERE statut = 'confirmée'
       ${periodeCondition}
     `;
 
     const result = await db.query(sql, params);
-    const data = result.rows[0];
-
-    // Calculs supplémentaires
-    const revenuJournalierMoyen = data.nb_jours_avec_reservations > 0 
-      ? Math.round(data.revenu_total / data.nb_jours_avec_reservations) 
-      : 0;
 
     res.json({
       success: true,
       periode: periode,
       date_debut: date_debut || new Date().toISOString().split('T')[0],
       date_fin: date_fin || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      data: {
-        ...data,
-        revenu_journalier_moyen: revenuJournalierMoyen,
-        efficacite_terrains: data.nb_terrains_utilises > 0 ? Math.round(data.revenu_total / data.nb_terrains_utilises) : 0
-      }
+      data: result.rows[0]
     });
+
   } catch (error) {
     console.error('❌ Erreur récupération revenus totaux:', error);
     res.status(500).json({
@@ -77,106 +67,132 @@ router.get('/revenus-totaux', async (req, res) => {
   }
 });
 
-// 📌 Route pour les prévisions de revenus AVEC DONNÉES RÉELLES
+// 📌 Route pour les prévisions de revenus
 router.get('/previsions/revenus', async (req, res) => {
   try {
     const { type = 'mensuel' } = req.query;
-    let sql = '';
 
+    let sql = '';
+    
     switch (type) {
       case 'journalier':
         sql = `
-          WITH dates_reelles AS (
-            SELECT DISTINCT datereservation as date_jour
-            FROM reservation
-            WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '30 days'
+          WITH dates_series AS (
+            SELECT generate_series(
+              CURRENT_DATE, 
+              CURRENT_DATE + INTERVAL '30 days', 
+              '1 day'::interval
+            )::date AS date_jour
           ),
-          revenus_reels AS (
+          revenus_jour AS (
             SELECT 
               datereservation,
               COALESCE(SUM(tarif), 0) AS revenu_journalier,
-              COUNT(*) AS nb_reservations,
-              COUNT(DISTINCT numeroterrain) AS terrains_utilises
+              COUNT(*) AS nb_reservations
             FROM reservation
             WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '30 days'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
             GROUP BY datereservation
           )
           SELECT 
-            dr.date_jour AS date,
-            TO_CHAR(dr.date_jour, 'DD/MM') AS date_formattee,
-            EXTRACT(DOW FROM dr.date_jour) AS jour_semaine,
-            COALESCE(rr.revenu_journalier, 0) AS revenu_reel,
-            COALESCE(rr.nb_reservations, 0) AS reservations_reelles,
-            COALESCE(rr.terrains_utilises, 0) AS terrains_utilises,
+            ds.date_jour AS date,
+            TO_CHAR(ds.date_jour, 'DD/MM') AS date_formattee,
+            EXTRACT(DOW FROM ds.date_jour) AS jour_semaine,
+            COALESCE(rj.revenu_journalier, 0) AS revenu_prevue,
+            COALESCE(rj.nb_reservations, 0) AS reservations_prevues,
             CASE 
-              WHEN dr.date_jour < CURRENT_DATE THEN 'historique'
-              WHEN dr.date_jour = CURRENT_DATE THEN 'aujourdhui'
-              ELSE 'futur'
-            END AS type_date
-          FROM dates_reelles dr
-          LEFT JOIN revenus_reels rr ON dr.date_jour = rr.datereservation
-          ORDER BY dr.date_jour ASC
+              WHEN COALESCE(rj.revenu_journalier, 0) >= 1000 THEN 'Élevé'
+              WHEN COALESCE(rj.revenu_journalier, 0) >= 500 THEN 'Moyen'
+              ELSE 'Faible'
+            END AS niveau_revenu
+          FROM dates_series ds
+          LEFT JOIN revenus_jour rj ON ds.date_jour = rj.datereservation
+          ORDER BY ds.date_jour ASC
+        `;
+        break;
+
+      case 'hebdomadaire':
+        sql = `
+          WITH semaines_series AS (
+            SELECT 
+              date_trunc('week', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 weeks', 
+                '1 week'::interval
+              )) AS debut_semaine
+          ),
+          revenus_semaine AS (
+            SELECT 
+              date_trunc('week', datereservation) AS debut_semaine,
+              COALESCE(SUM(tarif), 0) AS revenu_hebdomadaire,
+              COUNT(*) AS nb_reservations,
+              COUNT(DISTINCT datereservation) AS jours_occupes
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '84 days'
+            GROUP BY date_trunc('week', datereservation)
+          )
+          SELECT 
+            ss.debut_semaine AS date_debut_semaine,
+            (ss.debut_semaine + INTERVAL '6 days')::date AS date_fin_semaine,
+            TO_CHAR(ss.debut_semaine, 'DD/MM') || ' - ' || TO_CHAR(ss.debut_semaine + INTERVAL '6 days', 'DD/MM') AS periode_semaine,
+            COALESCE(rs.revenu_hebdomadaire, 0) AS revenu_prevue,
+            COALESCE(rs.nb_reservations, 0) AS reservations_prevues,
+            COALESCE(rs.jours_occupes, 0) AS jours_occupes,
+            ROUND(COALESCE(rs.revenu_hebdomadaire / NULLIF(rs.jours_occupes, 0), 0), 2) AS revenu_moyen_par_jour
+          FROM semaines_series ss
+          LEFT JOIN revenus_semaine rs ON ss.debut_semaine = rs.debut_semaine
+          ORDER BY ss.debut_semaine ASC
         `;
         break;
 
       case 'mensuel':
       default:
         sql = `
-          WITH mois_reels AS (
-            SELECT DISTINCT date_trunc('month', datereservation) as debut_mois
-            FROM reservation
-            WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '6 months' AND CURRENT_DATE + INTERVAL '6 months'
+          WITH mois_series AS (
+            SELECT 
+              date_trunc('month', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 months', 
+                '1 month'::interval
+              )) AS debut_mois
           ),
-          revenus_mensuels AS (
+          revenus_mois AS (
             SELECT 
               date_trunc('month', datereservation) AS debut_mois,
               COALESCE(SUM(tarif), 0) AS revenu_mensuel,
               COUNT(*) AS nb_reservations,
               COUNT(DISTINCT datereservation) AS jours_occupes,
-              COUNT(DISTINCT email) AS clients_uniques,
               ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation
             FROM reservation
             WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '6 months' AND CURRENT_DATE + INTERVAL '6 months'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '365 days'
             GROUP BY date_trunc('month', datereservation)
           )
           SELECT 
-            mr.debut_mois AS date_debut_mois,
-            (mr.debut_mois + INTERVAL '1 month - 1 day')::date AS date_fin_mois,
-            TO_CHAR(mr.debut_mois, 'MM/YYYY') AS periode_mois,
-            TO_CHAR(mr.debut_mois, 'Month YYYY') AS periode_mois_complet,
-            COALESCE(rm.revenu_mensuel, 0) AS revenu_reel,
-            COALESCE(rm.nb_reservations, 0) AS reservations_reelles,
+            ms.debut_mois AS date_debut_mois,
+            (ms.debut_mois + INTERVAL '1 month - 1 day')::date AS date_fin_mois,
+            TO_CHAR(ms.debut_mois, 'MM/YYYY') AS periode_mois,
+            TO_CHAR(ms.debut_mois, 'Month YYYY') AS periode_mois_complet,
+            COALESCE(rm.revenu_mensuel, 0) AS revenu_prevue,
+            COALESCE(rm.nb_reservations, 0) AS reservations_prevues,
             COALESCE(rm.jours_occupes, 0) AS jours_occupes,
-            COALESCE(rm.clients_uniques, 0) AS clients_uniques,
             COALESCE(rm.revenu_moyen_par_reservation, 0) AS revenu_moyen_par_reservation,
-            CASE 
-              WHEN mr.debut_mois < date_trunc('month', CURRENT_DATE) THEN 'historique'
-              WHEN mr.debut_mois = date_trunc('month', CURRENT_DATE) THEN 'courant'
-              ELSE 'futur'
-            END AS type_mois
-          FROM mois_reels mr
-          LEFT JOIN revenus_mensuels rm ON mr.debut_mois = rm.debut_mois
-          ORDER BY mr.debut_mois ASC
+            ROUND(COALESCE(rm.revenu_mensuel / NULLIF(rm.jours_occupes, 0), 0), 2) AS revenu_moyen_par_jour
+          FROM mois_series ms
+          LEFT JOIN revenus_mois rm ON ms.debut_mois = rm.debut_mois
+          ORDER BY ms.debut_mois ASC
         `;
     }
 
     const result = await db.query(sql);
-    
-    // Statistiques avancées
-    const historique = result.rows.filter(row => row.type_date === 'historique' || row.type_mois === 'historique');
-    const futur = result.rows.filter(row => row.type_date === 'futur' || row.type_mois === 'futur');
-    
+
     const stats = {
-      revenu_total_historique: historique.reduce((sum, row) => sum + parseFloat(row.revenu_reel), 0),
-      reservations_total_historique: historique.reduce((sum, row) => sum + parseInt(row.reservations_reelles), 0),
-      revenu_moyen_historique: historique.length > 0 ? Math.round(historique.reduce((sum, row) => sum + parseFloat(row.revenu_reel), 0) / historique.length) : 0,
-      revenu_total_futur: futur.reduce((sum, row) => sum + parseFloat(row.revenu_reel), 0),
-      croissance_prevue: historique.length > 0 ? 
-        Math.round(((futur.reduce((sum, row) => sum + parseFloat(row.revenu_reel), 0) / historique.reduce((sum, row) => sum + parseFloat(row.revenu_reel), 0)) - 1) * 100) : 0
+      revenu_total_prevue: result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_prevue), 0),
+      reservations_total_prevues: result.rows.reduce((sum, row) => sum + parseInt(row.reservations_prevues), 0),
+      moyenne_revenu_par_periode: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_prevue), 0) / result.rows.length),
+      periode_max_revenu: result.rows.reduce((max, row) => parseFloat(row.revenu_prevue) > parseFloat(max.revenu_prevue) ? row : max, result.rows[0]),
+      periode_min_revenu: result.rows.reduce((min, row) => parseFloat(row.revenu_prevue) < parseFloat(min.revenu_prevue) ? row : min, result.rows[0])
     };
 
     res.json({
@@ -185,12 +201,11 @@ router.get('/previsions/revenus', async (req, res) => {
       data: result.rows,
       statistiques: stats,
       metriques: {
-        periode_analyse: `${type} réelle`,
-        donnees_historiques: historique.length,
-        donnees_futures: futur.length,
+        nombre_periodes: result.rows.length,
         date_generation: new Date().toISOString()
       }
     });
+
   } catch (error) {
     console.error('❌ Erreur prévisions revenus:', error);
     res.status(500).json({
@@ -201,125 +216,149 @@ router.get('/previsions/revenus', async (req, res) => {
   }
 });
 
-// 📌 Route pour le taux de remplissage RÉEL
+// 📌 Route pour le taux de remplissage
 router.get('/taux-remplissage', async (req, res) => {
   try {
     const { type = 'mensuel' } = req.query;
-    let sql = '';
 
+    let sql = '';
+    
     switch (type) {
       case 'journalier':
         sql = `
-          WITH dates_reelles AS (
-            SELECT DISTINCT datereservation as date_jour
-            FROM reservation
-            WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '15 days' AND CURRENT_DATE + INTERVAL '15 days'
+          WITH dates_series AS (
+            SELECT generate_series(
+              CURRENT_DATE, 
+              CURRENT_DATE + INTERVAL '30 days', 
+              '1 day'::interval
+            )::date AS date_jour
           ),
-          occupation_reelle AS (
+          occupation_jour AS (
             SELECT 
               datereservation,
               COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
               COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
-              COUNT(DISTINCT numeroterrain) * 14 AS heures_disponibles, -- 7h-21h = 14h
+              COALESCE(COUNT(DISTINCT numeroterrain) * 12, 0) AS heures_disponibles,
               ROUND(
                 (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
                  /
-                 NULLIF(COUNT(DISTINCT numeroterrain) * 14, 0)
+                 NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
                 ) * 100, 2
-              ) AS taux_remplissage_reel,
-              COALESCE(SUM(tarif), 0) AS revenu_journalier
+              ) AS taux_remplissage
             FROM reservation
             WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '15 days' AND CURRENT_DATE + INTERVAL '15 days'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
             GROUP BY datereservation
           )
           SELECT 
-            dr.date_jour AS date,
-            TO_CHAR(dr.date_jour, 'DD/MM') AS date_formattee,
-            EXTRACT(DOW FROM dr.date_jour) AS jour_semaine,
+            ds.date_jour AS date,
+            TO_CHAR(ds.date_jour, 'DD/MM') AS date_formattee,
+            EXTRACT(DOW FROM ds.date_jour) AS jour_semaine,
             COALESCE(oj.nb_terrains_utilises, 0) AS terrains_occupes,
-            COALESCE(oj.taux_remplissage_reel, 0) AS taux_remplissage,
+            COALESCE(oj.taux_remplissage, 0) AS taux_remplissage,
             COALESCE(oj.heures_reservees, 0) AS heures_reservees,
-            COALESCE(oj.heures_disponibles, 14) AS heures_disponibles,
-            COALESCE(oj.revenu_journalier, 0) AS revenu_journalier,
+            COALESCE(oj.heures_disponibles, 12) AS heures_disponibles,
             CASE 
-              WHEN dr.date_jour < CURRENT_DATE THEN 'historique'
-              WHEN dr.date_jour = CURRENT_DATE THEN 'aujourdhui'
-              ELSE 'futur'
-            END AS type_date,
-            CASE 
-              WHEN COALESCE(oj.taux_remplissage_reel, 0) >= 70 THEN 'Élevé'
-              WHEN COALESCE(oj.taux_remplissage_reel, 0) >= 40 THEN 'Moyen'
+              WHEN COALESCE(oj.taux_remplissage, 0) >= 80 THEN 'Élevé'
+              WHEN COALESCE(oj.taux_remplissage, 0) >= 50 THEN 'Moyen'
               ELSE 'Faible'
             END AS niveau_remplissage
-          FROM dates_reelles dr
-          LEFT JOIN occupation_reelle oj ON dr.date_jour = oj.datereservation
-          ORDER BY dr.date_jour ASC
+          FROM dates_series ds
+          LEFT JOIN occupation_jour oj ON ds.date_jour = oj.datereservation
+          ORDER BY ds.date_jour ASC
+        `;
+        break;
+
+      case 'hebdomadaire':
+        sql = `
+          WITH semaines_series AS (
+            SELECT 
+              date_trunc('week', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 weeks', 
+                '1 week'::interval
+              )) AS debut_semaine
+          ),
+          occupation_semaine AS (
+            SELECT 
+              date_trunc('week', datereservation) AS debut_semaine,
+              ROUND(AVG(
+                (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+                 /
+                 NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+                ) * 100
+              ), 2) AS taux_remplissage_moyen,
+              COUNT(DISTINCT datereservation) AS jours_occupes,
+              SUM(COUNT(DISTINCT numeroterrain)) OVER () AS total_terrains_semaine,
+              AVG(COUNT(DISTINCT numeroterrain)) AS terrains_moyen_par_jour
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '84 days'
+            GROUP BY date_trunc('week', datereservation)
+          )
+          SELECT 
+            ss.debut_semaine AS date_debut_semaine,
+            (ss.debut_semaine + INTERVAL '6 days')::date AS date_fin_semaine,
+            TO_CHAR(ss.debut_semaine, 'DD/MM') || ' - ' || TO_CHAR(ss.debut_semaine + INTERVAL '6 days', 'DD/MM') AS periode_semaine,
+            COALESCE(os.taux_remplissage_moyen, 0) AS taux_remplissage,
+            COALESCE(os.jours_occupes, 0) AS jours_occupes,
+            COALESCE(os.terrains_moyen_par_jour, 0) AS terrains_moyen_par_jour
+          FROM semaines_series ss
+          LEFT JOIN occupation_semaine os ON ss.debut_semaine = os.debut_semaine
+          ORDER BY ss.debut_semaine ASC
         `;
         break;
 
       case 'mensuel':
       default:
         sql = `
-          WITH mois_reels AS (
-            SELECT DISTINCT date_trunc('month', datereservation) as debut_mois
-            FROM reservation
-            WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '6 months' AND CURRENT_DATE + INTERVAL '6 months'
+          WITH mois_series AS (
+            SELECT 
+              date_trunc('month', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 months', 
+                '1 month'::interval
+              )) AS debut_mois
           ),
-          occupation_mensuelle AS (
+          occupation_mois AS (
             SELECT 
               date_trunc('month', datereservation) AS debut_mois,
               ROUND(AVG(
                 (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
                  /
-                 NULLIF(COUNT(DISTINCT numeroterrain) * 14, 0)
+                 NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
                 ) * 100
               ), 2) AS taux_remplissage_moyen,
               COUNT(DISTINCT datereservation) AS jours_occupes,
               AVG(COUNT(DISTINCT numeroterrain)) AS terrains_moyen_par_jour,
-              MAX(COUNT(DISTINCT numeroterrain)) AS terrains_max_par_jour,
-              COUNT(*) AS total_reservations,
-              COALESCE(SUM(tarif), 0) AS revenu_mensuel
+              MAX(COUNT(DISTINCT numeroterrain)) AS terrains_max_par_jour
             FROM reservation
             WHERE statut = 'confirmée'
-              AND datereservation BETWEEN CURRENT_DATE - INTERVAL '6 months' AND CURRENT_DATE + INTERVAL '6 months'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '365 days'
             GROUP BY date_trunc('month', datereservation)
           )
           SELECT 
-            mr.debut_mois AS date_debut_mois,
-            (mr.debut_mois + INTERVAL '1 month - 1 day')::date AS date_fin_mois,
-            TO_CHAR(mr.debut_mois, 'MM/YYYY') AS periode_mois,
-            TO_CHAR(mr.debut_mois, 'Month YYYY') AS periode_mois_complet,
+            ms.debut_mois AS date_debut_mois,
+            (ms.debut_mois + INTERVAL '1 month - 1 day')::date AS date_fin_mois,
+            TO_CHAR(ms.debut_mois, 'MM/YYYY') AS periode_mois,
+            TO_CHAR(ms.debut_mois, 'Month YYYY') AS periode_mois_complet,
             COALESCE(om.taux_remplissage_moyen, 0) AS taux_remplissage,
             COALESCE(om.jours_occupes, 0) AS jours_occupes,
             COALESCE(om.terrains_moyen_par_jour, 0) AS terrains_moyen_par_jour,
-            COALESCE(om.terrains_max_par_jour, 0) AS terrains_max_par_jour,
-            COALESCE(om.total_reservations, 0) AS total_reservations,
-            COALESCE(om.revenu_mensuel, 0) AS revenu_mensuel,
-            CASE 
-              WHEN mr.debut_mois < date_trunc('month', CURRENT_DATE) THEN 'historique'
-              WHEN mr.debut_mois = date_trunc('month', CURRENT_DATE) THEN 'courant'
-              ELSE 'futur'
-            END AS type_mois
-          FROM mois_reels mr
-          LEFT JOIN occupation_mensuelle om ON mr.debut_mois = om.debut_mois
-          ORDER BY mr.debut_mois ASC
+            COALESCE(om.terrains_max_par_jour, 0) AS terrains_max_par_jour
+          FROM mois_series ms
+          LEFT JOIN occupation_mois om ON ms.debut_mois = om.debut_mois
+          ORDER BY ms.debut_mois ASC
         `;
     }
 
     const result = await db.query(sql);
-    
-    const historique = result.rows.filter(row => row.type_date === 'historique' || row.type_mois === 'historique');
+
     const stats = {
-      taux_remplissage_moyen: historique.length > 0 ? 
-        Math.round(historique.reduce((sum, row) => sum + parseFloat(row.taux_remplissage), 0) / historique.length) : 0,
-      meilleur_taux: historique.length > 0 ? 
-        Math.max(...historique.map(row => parseFloat(row.taux_remplissage))) : 0,
-      pire_taux: historique.length > 0 ? 
-        Math.min(...historique.map(row => parseFloat(row.taux_remplissage))) : 0,
-      jours_occupes_total: historique.reduce((sum, row) => sum + parseInt(row.jours_occupes || 0), 0)
+      taux_remplissage_moyen: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.taux_remplissage), 0) / result.rows.length),
+      periode_max_remplissage: result.rows.reduce((max, row) => parseFloat(row.taux_remplissage) > parseFloat(max.taux_remplissage) ? row : max, result.rows[0]),
+      periode_min_remplissage: result.rows.reduce((min, row) => parseFloat(row.taux_remplissage) < parseFloat(min.taux_remplissage) ? row : min, result.rows[0]),
+      jours_occupes_total: result.rows.reduce((sum, row) => sum + parseInt(row.jours_occupes || 0), 0)
     };
 
     res.json({
@@ -329,10 +368,10 @@ router.get('/taux-remplissage', async (req, res) => {
       statistiques: stats,
       metriques: {
         nombre_periodes: result.rows.length,
-        periode_analyse: 'données réelles',
         date_generation: new Date().toISOString()
       }
     });
+
   } catch (error) {
     console.error('❌ Erreur taux remplissage:', error);
     res.status(500).json({
@@ -343,7 +382,7 @@ router.get('/taux-remplissage', async (req, res) => {
   }
 });
 
-// 📌 Route pour les statistiques en temps réel AVEC PLUS DE DÉTAILS
+// 📌 Route pour les statistiques en temps réel
 router.get('/statistiques-temps-reel', async (req, res) => {
   try {
     const terrainsOccupesSql = `
@@ -359,7 +398,7 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       SELECT COUNT(*) AS annulations_semaine
       FROM reservation 
       WHERE statut = 'annulée'
-        AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE + INTERVAL '7 days'
+        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
     `;
 
     const terrainsActifsSql = `
@@ -370,35 +409,20 @@ router.get('/statistiques-temps-reel', async (req, res) => {
     `;
 
     const reservationsAujourdhuiSql = `
-      SELECT 
-        COUNT(*) AS reservations_aujourdhui,
-        COALESCE(SUM(tarif), 0) AS revenu_aujourdhui,
-        COUNT(DISTINCT numeroterrain) AS terrains_utilises_aujourdhui,
-        COUNT(DISTINCT email) AS clients_uniques_aujourdhui
+      SELECT COUNT(*) AS reservations_aujourdhui,
+             COALESCE(SUM(tarif), 0) AS revenu_aujourdhui
       FROM reservation 
       WHERE statut = 'confirmée'
         AND datereservation = CURRENT_DATE
     `;
 
     const reservationsMoisSql = `
-      SELECT 
-        COUNT(*) AS reservations_mois,
-        COALESCE(SUM(tarif), 0) AS revenu_mois,
-        COUNT(DISTINCT datereservation) AS jours_occupes_mois,
-        COUNT(DISTINCT email) AS clients_uniques_mois
+      SELECT COUNT(*) AS reservations_mois,
+             COALESCE(SUM(tarif), 0) AS revenu_mois
       FROM reservation 
       WHERE statut = 'confirmée'
         AND datereservation >= date_trunc('month', CURRENT_DATE)
         AND datereservation < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
-    `;
-
-    const reservationsSemaineSql = `
-      SELECT 
-        COUNT(*) AS reservations_semaine,
-        COALESCE(SUM(tarif), 0) AS revenu_semaine
-      FROM reservation 
-      WHERE statut = 'confirmée'
-        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
     `;
 
     const [
@@ -406,46 +430,24 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       annulationsResult,
       terrainsActifsResult,
       reservationsAujourdhuiResult,
-      reservationsMoisResult,
-      reservationsSemaineResult
+      reservationsMoisResult
     ] = await Promise.all([
       db.query(terrainsOccupesSql),
       db.query(annulationsSemaineSql),
       db.query(terrainsActifsSql),
       db.query(reservationsAujourdhuiSql),
-      db.query(reservationsMoisSql),
-      db.query(reservationsSemaineSql)
+      db.query(reservationsMoisSql)
     ]);
 
     const stats = {
-      // Occupation actuelle
       terrains_occupes_actuels: terrainsOccupesResult.rows[0]?.terrains_occupes_actuels || 0,
-      
-      // Performances aujourd'hui
-      reservations_aujourdhui: reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui || 0,
-      revenu_aujourdhui: reservationsAujourdhuiResult.rows[0]?.revenu_aujourdhui || 0,
-      terrains_utilises_aujourdhui: reservationsAujourdhuiResult.rows[0]?.terrains_utilises_aujourdhui || 0,
-      clients_uniques_aujourdhui: reservationsAujourdhuiResult.rows[0]?.clients_uniques_aujourdhui || 0,
-      
-      // Performances semaine
-      reservations_semaine: reservationsSemaineResult.rows[0]?.reservations_semaine || 0,
-      revenu_semaine: reservationsSemaineResult.rows[0]?.revenu_semaine || 0,
       annulations_semaine: annulationsResult.rows[0]?.annulations_semaine || 0,
       terrains_actifs_semaine: terrainsActifsResult.rows[0]?.terrains_actifs_semaine || 0,
-      
-      // Performances mois
+      reservations_aujourdhui: reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui || 0,
+      revenu_aujourdhui: reservationsAujourdhuiResult.rows[0]?.revenu_aujourdhui || 0,
       reservations_mois: reservationsMoisResult.rows[0]?.reservations_mois || 0,
       revenu_mois: reservationsMoisResult.rows[0]?.revenu_mois || 0,
-      jours_occupes_mois: reservationsMoisResult.rows[0]?.jours_occupes_mois || 0,
-      clients_uniques_mois: reservationsMoisResult.rows[0]?.clients_uniques_mois || 0,
-
-      // Calculs dérivés
-      taux_remplissage_aujourdhui: Math.round((reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui || 0) * 100 / 8),
-      revenu_moyen_aujourdhui: (reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui || 0) > 0 ? 
-        Math.round(reservationsAujourdhuiResult.rows[0]?.revenu_aujourdhui / reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui) : 0,
-      
-      date_actualisation: new Date().toISOString(),
-      heure_serveur: new Date().toLocaleTimeString('fr-FR')
+      date_actualisation: new Date().toISOString()
     };
 
     res.json({
@@ -453,9 +455,10 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       data: stats,
       metriques: {
         periode: 'temps_réel',
-        source: 'données_live'
+        heure_serveur: new Date().toLocaleTimeString('fr-FR')
       }
     });
+
   } catch (error) {
     console.error('❌ Erreur statistiques temps réel:', error);
     res.status(500).json({
@@ -466,108 +469,71 @@ router.get('/statistiques-temps-reel', async (req, res) => {
   }
 });
 
-// 📌 Route pour récupérer les prévisions de réservations BASÉES SUR L'HISTORIQUE
+// 📌 Route pour récupérer les prévisions de réservations
 router.get('/previsions/occupation', async (req, res) => {
   try {
     const { jours = 14, top } = req.query;
     const joursNumber = parseInt(jours);
-    
+
     let sql = `
-      WITH historique AS (
-        SELECT 
-          datereservation,
-          COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
-          COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
-          COUNT(DISTINCT numeroterrain) * 14 AS heures_disponibles,
-          ROUND(
-            (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
-             /
-             NULLIF(COUNT(DISTINCT numeroterrain) * 14, 0)
-            ) * 100, 2
-          ) AS taux_occupation_reel,
-          COALESCE(SUM(tarif), 0) AS revenu_reel,
-          COUNT(*) AS nb_reservations,
-          EXTRACT(DOW FROM datereservation) AS jour_semaine
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '${joursNumber} days'
-        GROUP BY datereservation
-      ),
-      moyenne_par_jour AS (
-        SELECT 
-          jour_semaine,
-          ROUND(AVG(taux_occupation_reel), 2) AS taux_moyen,
-          ROUND(AVG(nb_reservations), 2) AS reservations_moyennes,
-          ROUND(AVG(revenu_reel), 2) AS revenu_moyen
-        FROM historique
-        WHERE datereservation < CURRENT_DATE
-        GROUP BY jour_semaine
-      )
       SELECT 
-        h.datereservation,
-        h.nb_terrains_utilises,
-        h.heures_reservees,
-        h.heures_disponibles,
-        CASE 
-          WHEN h.datereservation < CURRENT_DATE THEN h.taux_occupation_reel
-          ELSE COALESCE(m.taux_moyen, 30) -- Valeur par défaut si pas d'historique
-        END AS taux_occupation_prevu,
-        CASE 
-          WHEN h.datereservation < CURRENT_DATE THEN h.revenu_reel
-          ELSE COALESCE(m.revenu_moyen, 500)
-        END AS revenu_attendu,
-        CASE 
-          WHEN h.datereservation < CURRENT_DATE THEN h.nb_reservations
-          ELSE COALESCE(m.reservations_moyennes, 4)
-        END AS nb_reservations,
-        h.jour_semaine,
-        CASE 
-          WHEN h.datereservation < CURRENT_DATE THEN 'historique'
-          ELSE 'prevision'
-        END AS type_donnee
-      FROM historique h
-      LEFT JOIN moyenne_par_jour m ON h.jour_semaine = m.jour_semaine
-      WHERE h.datereservation >= CURRENT_DATE - INTERVAL '7 days'
-        AND h.datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
+        datereservation,
+        COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
+        COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
+        COALESCE(COUNT(DISTINCT numeroterrain) * 12, 0) AS heures_disponibles,
+        ROUND(
+          (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+           /
+           NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+          ) * 100, 2
+        ) AS taux_occupation_prevu,
+        COALESCE(SUM(tarif), 0) AS revenu_attendu,
+        COUNT(*) AS nb_reservations
+      FROM reservation
+      WHERE statut = 'confirmée'
+        AND datereservation >= CURRENT_DATE
+        AND datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
+      GROUP BY datereservation
     `;
 
     if (top) {
       sql += ` ORDER BY taux_occupation_prevu DESC, heures_reservees DESC LIMIT $1`;
     } else {
-      sql += ` ORDER BY h.datereservation ASC`;
+      sql += ` ORDER BY datereservation ASC`;
     }
 
     const result = await db.query(sql, top ? [parseInt(top)] : []);
 
-    const historique = result.rows.filter(row => row.type_donnee === 'historique');
-    const previsions = result.rows.filter(row => row.type_donnee === 'prevision');
-
     const stats = {
-      moyenne_occupation_historique: historique.length > 0 ? 
-        Math.round(historique.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / historique.length) : 0,
-      moyenne_occupation_prevision: previsions.length > 0 ? 
-        Math.round(previsions.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / previsions.length) : 0,
-      jour_plus_charge: result.rows.reduce(
+      moyenne_occupation: 0,
+      jour_plus_charge: null,
+      revenu_total_attendu: 0,
+      reservations_total: 0
+    };
+
+    if (result.rows.length > 0) {
+      stats.moyenne_occupation = Math.round(
+        result.rows.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / result.rows.length
+      );
+      
+      stats.jour_plus_charge = result.rows.reduce(
         (max, row) => parseFloat(row.taux_occupation_prevu) > parseFloat(max.taux_occupation_prevu) ? row : max,
         result.rows[0]
-      ),
-      revenu_total_attendu: previsions.reduce((sum, row) => sum + parseFloat(row.revenu_attendu), 0),
-      reservations_total: result.rows.reduce((sum, row) => sum + parseInt(row.nb_reservations), 0)
-    };
+      );
+      
+      stats.revenu_total_attendu = result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_attendu), 0);
+      stats.reservations_total = result.rows.reduce((sum, row) => sum + parseInt(row.nb_reservations), 0);
+    }
 
     res.json({
       success: true,
       data: result.rows,
       periode: joursNumber,
       statistiques: stats,
-      analyse: {
-        donnees_historiques: historique.length,
-        donnees_previsionnelles: previsions.length,
-        fiabilité: historique.length > 10 ? 'élevée' : 'moyenne'
-      },
       date_debut: new Date().toISOString().split('T')[0],
       date_fin: new Date(Date.now() + joursNumber * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     });
+
   } catch (error) {
     console.error('❌ Erreur récupération prévisions:', error);
     res.status(500).json({
@@ -578,67 +544,60 @@ router.get('/previsions/occupation', async (req, res) => {
   }
 });
 
-// 📌 Route pour les prévisions détaillées avec tendances BASÉES SUR RÉALITÉ
+// 📌 Route pour les prévisions détaillées avec tendances
 router.get('/previsions/detaillees', async (req, res) => {
   try {
     const { jours = 14 } = req.query;
     const joursNumber = parseInt(jours);
-    
+
     const sql = `
-      WITH reservations_completes AS (
+      WITH reservations_jour AS (
         SELECT 
           datereservation,
           COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
           COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
-          COUNT(DISTINCT numeroterrain) * 14 AS heures_disponibles,
+          COALESCE(COUNT(DISTINCT numeroterrain) * 12, 0) AS heures_disponibles,
           ROUND(
             (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
              /
-             NULLIF(COUNT(DISTINCT numeroterrain) * 14, 0)
+             NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
             ) * 100, 2
-          ) AS taux_occupation_reel,
-          COALESCE(SUM(tarif), 0) AS revenu_reel,
+          ) AS taux_occupation_prevu,
+          COALESCE(SUM(tarif), 0) AS revenu_attendu,
           COUNT(*) AS nb_reservations,
-          STRING_AGG(DISTINCT typeterrain, ', ') AS terrains_types,
-          COUNT(DISTINCT email) AS clients_uniques,
-          EXTRACT(DOW FROM datereservation) AS jour_semaine
+          STRING_AGG(DISTINCT typeterrain, ', ') AS terrains_types
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE + INTERVAL '${joursNumber} days'
+          AND datereservation >= CURRENT_DATE
+          AND datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
         GROUP BY datereservation
       ),
       tendances AS (
         SELECT 
           datereservation,
-          taux_occupation_reel,
-          LAG(taux_occupation_reel) OVER (ORDER BY datereservation) AS occupation_precedente,
+          taux_occupation_prevu,
+          LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) AS occupation_precedente,
           CASE 
-            WHEN LAG(taux_occupation_reel) OVER (ORDER BY datereservation) IS NULL THEN 'stable'
-            WHEN taux_occupation_reel > LAG(taux_occupation_reel) OVER (ORDER BY datereservation) THEN 'up'
-            WHEN taux_occupation_reel < LAG(taux_occupation_reel) OVER (ORDER BY datereservation) THEN 'down'
+            WHEN LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) IS NULL THEN 'stable'
+            WHEN taux_occupation_prevu > LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) THEN 'up'
+            WHEN taux_occupation_prevu < LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) THEN 'down'
             ELSE 'stable'
           END AS tendance
-        FROM reservations_completes
+        FROM reservations_jour
       )
       SELECT 
-        rc.*,
+        rj.*,
         t.tendance,
-        TO_CHAR(rc.datereservation, 'DD Mon') AS date_formattee,
+        TO_CHAR(rj.datereservation, 'DD Mon') AS date_formattee,
+        EXTRACT(DOW FROM rj.datereservation) AS jour_semaine,
         CASE 
-          WHEN rc.datereservation < CURRENT_DATE THEN 'historique'
-          WHEN rc.datereservation = CURRENT_DATE THEN 'present'
-          ELSE 'futur'
-        END AS periode,
-        CASE 
-          WHEN rc.taux_occupation_reel >= 70 THEN 'Élevée'
-          WHEN rc.taux_occupation_reel >= 40 THEN 'Moyenne'
+          WHEN rj.taux_occupation_prevu >= 80 THEN 'Élevée'
+          WHEN rj.taux_occupation_prevu >= 50 THEN 'Moyenne'
           ELSE 'Faible'
         END AS niveau_occupation
-      FROM reservations_completes rc
-      LEFT JOIN tendances t ON rc.datereservation = t.datereservation
-      WHERE rc.datereservation >= CURRENT_DATE - INTERVAL '7 days'
-        AND rc.datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
-      ORDER BY rc.datereservation ASC
+      FROM reservations_jour rj
+      LEFT JOIN tendances t ON rj.datereservation = t.datereservation
+      ORDER BY rj.datereservation ASC
     `;
 
     const result = await db.query(sql);
@@ -646,12 +605,10 @@ router.get('/previsions/detaillees', async (req, res) => {
     const today = new Date();
     const dateFin = new Date(today);
     dateFin.setDate(today.getDate() + joursNumber);
-
-    // Compléter les dates manquantes
+    
     const toutesLesDates = [];
     const dateCourante = new Date(today);
-    dateCourante.setDate(dateCourante.getDate() - 7); // Inclure 7 jours d'historique
-
+    
     while (dateCourante <= dateFin) {
       const dateStr = dateCourante.toISOString().split('T')[0];
       const dateFormatee = dateCourante.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -660,69 +617,46 @@ router.get('/previsions/detaillees', async (req, res) => {
       const reservationExistante = result.rows.find(row => 
         row.datereservation.toISOString().split('T')[0] === dateStr
       );
-
+      
       if (reservationExistante) {
         toutesLesDates.push(reservationExistante);
       } else {
-        const periode = dateCourante < today ? 'historique' : 
-                       dateCourante.getTime() === today.getTime() ? 'present' : 'futur';
-        
         toutesLesDates.push({
           datereservation: dateStr,
-          taux_occupation_reel: 0,
+          taux_occupation_prevu: 0,
           heures_reservees: 0,
-          revenu_reel: 0,
+          revenu_attendu: 0,
           nb_reservations: 0,
           tendance: 'stable',
           date_formattee: dateFormatee,
           jour_semaine: jourSemaine,
           niveau_occupation: 'Faible',
           nb_terrains_utilises: 0,
-          heures_disponibles: 14,
-          terrains_types: 'Aucun',
-          clients_uniques: 0,
-          periode: periode
+          heures_disponibles: 12,
+          terrains_types: 'Aucun'
         });
       }
+      
       dateCourante.setDate(dateCourante.getDate() + 1);
     }
 
-    const historique = toutesLesDates.filter(row => row.periode === 'historique');
-    const present = toutesLesDates.filter(row => row.periode === 'present');
-    const futur = toutesLesDates.filter(row => row.periode === 'futur');
-
     const stats = {
-      // Statistiques historiques
-      moyenne_occupation_historique: historique.length > 0 ? 
-        Math.round(historique.reduce((sum, row) => sum + parseFloat(row.taux_occupation_reel), 0) / historique.length) : 0,
-      
-      // Prévisions basées sur historique
-      moyenne_occupation_futur: futur.length > 0 ? 
-        Math.round(futur.reduce((sum, row) => sum + parseFloat(row.taux_occupation_reel), 0) / futur.length) : 0,
-      
+      moyenne_occupation: Math.round(
+        toutesLesDates.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / toutesLesDates.length
+      ),
       jour_plus_charge: toutesLesDates.reduce(
-        (max, row) => parseFloat(row.taux_occupation_reel) > parseFloat(max.taux_occupation_reel) ? row : max,
+        (max, row) => parseFloat(row.taux_occupation_prevu) > parseFloat(max.taux_occupation_prevu) ? row : max,
         toutesLesDates[0]
       ),
       jour_moins_charge: toutesLesDates.reduce(
-        (min, row) => parseFloat(row.taux_occupation_reel) < parseFloat(min.taux_occupation_reel) ? row : min,
+        (min, row) => parseFloat(row.taux_occupation_prevu) < parseFloat(min.taux_occupation_prevu) ? row : min,
         toutesLesDates[0]
       ),
-      revenu_total_attendu: futur.reduce((sum, row) => sum + parseFloat(row.revenu_reel), 0),
+      revenu_total_attendu: toutesLesDates.reduce((sum, row) => sum + parseFloat(row.revenu_attendu), 0),
       reservations_total: toutesLesDates.reduce((sum, row) => sum + parseInt(row.nb_reservations), 0),
-      
-      // Analyse détaillée
-      jours_eleves: toutesLesDates.filter(row => parseFloat(row.taux_occupation_reel) >= 70).length,
-      jours_moyens: toutesLesDates.filter(row => parseFloat(row.taux_occupation_reel) >= 40 && parseFloat(row.taux_occupation_reel) < 70).length,
-      jours_faibles: toutesLesDates.filter(row => parseFloat(row.taux_occupation_reel) < 40).length,
-      
-      // Indicateurs de performance
-      taux_remplissage_moyen: Math.round(
-        historique.reduce((sum, row) => sum + parseFloat(row.taux_occupation_reel), 0) / Math.max(historique.length, 1)
-      ),
-      croissance_prevue: historique.length > 0 ? 
-        Math.round(((futur.reduce((sum, row) => sum + parseFloat(row.taux_occupation_reel), 0) / futur.length) / 
-                   (historique.reduce((sum, row) => sum + parseFloat(row.taux_occupation_reel), 0) / historique.length) - 1) * 100) : 0
+      jours_eleves: toutesLesDates.filter(row => parseFloat(row.taux_occupation_prevu) >= 80).length,
+      jours_moyens: toutesLesDates.filter(row => parseFloat(row.taux_occupation_prevu) >= 50 && parseFloat(row.taux_occupation_prevu) < 80).length,
+      jours_faibles: toutesLesDates.filter(row => parseFloat(row.taux_occupation_prevu) < 50).length
     };
 
     res.json({
@@ -732,14 +666,12 @@ router.get('/previsions/detaillees', async (req, res) => {
       statistiques: stats,
       metriques: {
         jours_analyse: toutesLesDates.length,
-        jours_historique: historique.length,
-        jours_futur: futur.length,
-        date_debut: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        date_debut: today.toISOString().split('T')[0],
         date_fin: dateFin.toISOString().split('T')[0],
-        terrains_moyen: Math.round(toutesLesDates.reduce((sum, row) => sum + parseInt(row.nb_terrains_utilises), 0) / toutesLesDates.length),
-        fiabilité_estimation: historique.length > 14 ? 'très élevée' : historique.length > 7 ? 'élevée' : 'moyenne'
+        terrains_moyen: Math.round(toutesLesDates.reduce((sum, row) => sum + parseInt(row.nb_terrains_utilises), 0) / toutesLesDates.length)
       }
     });
+
   } catch (error) {
     console.error('❌ Erreur prévisions détaillées:', error);
     res.status(500).json({
@@ -750,12 +682,13 @@ router.get('/previsions/detaillees', async (req, res) => {
   }
 });
 
-// 📧 GESTION DES EMAILS
+// 📧 GESTION DES EMAILS - VERSION AMÉLIORÉE
 
 // 📌 Route pour vérifier la configuration email
 router.get('/email/config', async (req, res) => {
   try {
     const config = await checkEmailConfiguration();
+    
     res.json({
       success: true,
       configuration: config,
@@ -770,16 +703,18 @@ router.get('/email/config', async (req, res) => {
   }
 });
 
-// 📌 Route pour tester l'envoi d'email
+// 📌 Route pour tester l'envoi d'email - VERSION SIMPLIFIÉE
 router.post('/email/test', async (req, res) => {
   try {
     const { email } = req.body;
+
     if (!email) {
       return res.status(400).json({
         success: false,
         message: 'Email de test requis'
       });
     }
+
     if (!email.includes('@')) {
       return res.status(400).json({
         success: false,
@@ -805,6 +740,7 @@ router.post('/email/test', async (req, res) => {
 
     console.log('🧪 TEST EMAIL MANUEL vers:', email);
     const result = await sendReservationConfirmation(testReservation);
+    
     if (result.success) {
       res.json({
         success: true,
@@ -822,6 +758,7 @@ router.post('/email/test', async (req, res) => {
         email: email
       });
     }
+
   } catch (error) {
     console.error('❌ Erreur test email manuel:', error);
     res.status(500).json({
@@ -832,12 +769,13 @@ router.post('/email/test', async (req, res) => {
   }
 });
 
-// 🎯 GESTION DES RÉSERVATIONS
+// 🎯 GESTION DES RÉSERVATIONS - AVEC GESTION EMAIL AMÉLIORÉE
 
 // 📌 Route pour récupérer les réservations (avec ou sans filtres)
 router.get('/', async (req, res) => {
   try {
     const { nom, email, statut, date, page = 1, limit = 10 } = req.query;
+
     let sql = `
       SELECT 
         numeroreservations as id,
@@ -857,6 +795,7 @@ router.get('/', async (req, res) => {
       FROM reservation 
       WHERE 1=1
     `;
+
     const params = [];
     let paramCount = 0;
 
@@ -865,16 +804,19 @@ router.get('/', async (req, res) => {
       sql += ` AND nomclient ILIKE $${paramCount}`;
       params.push(`%${nom}%`);
     }
+
     if (email) {
       paramCount++;
       sql += ` AND email ILIKE $${paramCount}`;
       params.push(`%${email}%`);
     }
+
     if (statut) {
       paramCount++;
       sql += ` AND statut = $${paramCount}`;
       params.push(statut);
     }
+
     if (date) {
       paramCount++;
       sql += ` AND datereservation = $${paramCount}`;
@@ -892,6 +834,7 @@ router.get('/', async (req, res) => {
     params.push(parseInt(limit), offset);
 
     const result = await db.query(sql, params);
+
     res.json({
       success: true,
       count: result.rows.length,
@@ -900,6 +843,7 @@ router.get('/', async (req, res) => {
       totalPages: Math.ceil(totalCount / limit),
       data: result.rows
     });
+
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
     res.status(500).json({
@@ -914,6 +858,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
     const sql = `
       SELECT 
         numeroreservations as id,
@@ -933,17 +878,21 @@ router.get('/:id', async (req, res) => {
       FROM reservation 
       WHERE numeroreservations = $1
     `;
+
     const result = await db.query(sql, [id]);
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     res.json({
       success: true,
       data: result.rows[0]
     });
+
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
     res.status(500).json({
@@ -954,7 +903,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour créer une nouvelle réservation
+// 📌 Route pour créer une nouvelle réservation - AVEC GESTION EMAIL AMÉLIORÉE
 router.post('/', async (req, res) => {
   try {
     const {
@@ -988,6 +937,7 @@ router.post('/', async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING numeroreservations as id, *
     `;
+
     const params = [
       datereservation, heurereservation, statut, numeroterrain,
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
@@ -996,21 +946,32 @@ router.post('/', async (req, res) => {
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
 
-    // Gestion de l'envoi d'email
+    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL
     let emailResult = null;
+    
+    // Conditions pour l'envoi d'email
     const shouldSendEmail = statut === 'confirmée' && email && email.includes('@');
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Tentative d'envoi d'email de confirmation à: ${email}`);
+        console.log(`🏟️ Réservation pour: ${nomterrain || 'Terrain ' + numeroterrain}`);
+        
         emailResult = await sendReservationConfirmation(newReservation);
+        
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
         } else {
           console.error('❌ Erreur lors de l\'envoi de l\'email:', emailResult.error);
+          // On ne bloque pas la réponse à cause de l'email
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { success: false, error: emailError.message };
+        emailResult = { 
+          success: false, 
+          error: emailError.message,
+          sent: false
+        };
       }
     } else {
       console.log('ℹ️  Aucun email envoyé - Raisons:',
@@ -1018,15 +979,21 @@ router.post('/', async (req, res) => {
         !email ? 'Email manquant' : '',
         !email.includes('@') ? 'Email invalide' : ''
       );
-      emailResult = { sent: false, reason: 'Non requis' };
+      emailResult = { 
+        sent: false, 
+        reason: 'Non requis (statut non confirmé ou email manquant/invalide)' 
+      };
     }
 
+    // Réponse réussie même si l'email échoue
     res.status(201).json({
       success: true,
-      message: 'Réservation créée avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Réservation créée avec succès' + 
+               (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: newReservation,
       email: emailResult
     });
+
   } catch (error) {
     console.error('❌ Erreur création réservation:', error);
     res.status(500).json({
@@ -1037,7 +1004,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour une réservation
+// 📌 Route pour mettre à jour une réservation - AVEC GESTION EMAIL AMÉLIORÉE
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1057,18 +1024,22 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
+    // Récupérer l'ancienne réservation pour vérifier le changement de statut
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
       [id]
     );
+
     if (oldReservationResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     const oldReservation = oldReservationResult.rows[0];
     const oldStatus = oldReservation.statut;
+    const oldEmail = oldReservation.email;
 
     const sql = `
       UPDATE reservation 
@@ -1089,6 +1060,7 @@ router.put('/:id', async (req, res) => {
       WHERE numeroreservations = $14
       RETURNING numeroreservations as id, *
     `;
+
     const params = [
       datereservation, heurereservation, statut, numeroterrain,
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain, id
@@ -1097,14 +1069,20 @@ router.put('/:id', async (req, res) => {
     const result = await db.query(sql, params);
     const updatedReservation = result.rows[0];
 
+    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL POUR MISES À JOUR
     let emailResult = null;
+    
+    // Conditions pour l'envoi d'email lors de la mise à jour
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = email && email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation (mise à jour) à: ${email}`);
+        
         emailResult = await sendReservationConfirmation(updatedReservation);
+        
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
         } else {
@@ -1112,19 +1090,30 @@ router.put('/:id', async (req, res) => {
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { success: false, error: emailError.message };
+        emailResult = { 
+          success: false, 
+          error: emailError.message 
+        };
       }
     } else {
-      console.log('ℹ️  Aucun email envoyé pour mise à jour');
-      emailResult = { sent: false, reason: 'Non requis' };
+      console.log('ℹ️  Aucun email envoyé pour mise à jour - Raisons:',
+        !becameConfirmed ? 'Statut non changé vers confirmée' : '',
+        !hasValidEmail ? 'Email manquant ou invalide' : ''
+      );
+      emailResult = { 
+        sent: false, 
+        reason: becameConfirmed ? 'Email invalide' : 'Statut inchangé' 
+      };
     }
 
     res.json({
       success: true,
-      message: 'Réservation mise à jour avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Réservation mise à jour avec succès' + 
+               (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: updatedReservation,
       email: emailResult
     });
+
   } catch (error) {
     console.error('❌ Erreur mise à jour réservation:', error);
     res.status(500).json({
@@ -1139,19 +1128,24 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
     const sql = 'DELETE FROM reservation WHERE numeroreservations = $1 RETURNING numeroreservations as id, *';
+
     const result = await db.query(sql, [id]);
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     res.json({
       success: true,
       message: 'Réservation supprimée avec succès.',
       data: result.rows[0]
     });
+
   } catch (error) {
     console.error('❌ Erreur suppression réservation:', error);
     res.status(500).json({
@@ -1162,11 +1156,12 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour le statut d'une réservation
+// 📌 Route pour mettre à jour le statut d'une réservation - AVEC GESTION EMAIL AMÉLIORÉE
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
     const { statut } = req.body;
+
     if (!statut || !['confirmée', 'annulée', 'en attente', 'terminée'].includes(statut)) {
       return res.status(400).json({
         success: false,
@@ -1174,16 +1169,19 @@ router.put('/:id/statut', async (req, res) => {
       });
     }
 
+    // Récupérer l'ancienne réservation pour vérifier le changement de statut
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
       [id]
     );
+
     if (oldReservationResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     const oldReservation = oldReservationResult.rows[0];
     const oldStatus = oldReservation.statut;
 
@@ -1193,17 +1191,24 @@ router.put('/:id/statut', async (req, res) => {
       WHERE numeroreservations = $2
       RETURNING numeroreservations as id, *
     `;
+
     const result = await db.query(sql, [statut, id]);
     const reservation = result.rows[0];
 
+    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL POUR CHANGEMENT DE STATUT
     let emailResult = null;
+    
+    // Conditions pour l'envoi d'email lors du changement de statut
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = reservation.email && reservation.email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation (changement statut) à: ${reservation.email}`);
+        
         emailResult = await sendReservationConfirmation(reservation);
+        
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
         } else {
@@ -1211,19 +1216,30 @@ router.put('/:id/statut', async (req, res) => {
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { success: false, error: emailError.message };
+        emailResult = { 
+          success: false, 
+          error: emailError.message 
+        };
       }
     } else {
-      console.log('ℹ️  Aucun email envoyé pour changement statut');
-      emailResult = { sent: false, reason: 'Non requis' };
+      console.log('ℹ️  Aucun email envoyé pour changement statut - Raisons:',
+        !becameConfirmed ? 'Statut non changé vers confirmée' : '',
+        !hasValidEmail ? 'Email manquant ou invalide' : ''
+      );
+      emailResult = { 
+        sent: false, 
+        reason: becameConfirmed ? 'Email invalide' : 'Statut inchangé' 
+      };
     }
 
     res.json({
       success: true,
-      message: 'Statut mis à jour avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Statut de la réservation mis à jour avec succès' + 
+               (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: reservation,
       email: emailResult
     });
+
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
     res.status(500).json({
@@ -1252,12 +1268,15 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
       GROUP BY numeroterrain, nomterrain
       ORDER BY numeroterrain
     `;
+
     const result = await db.query(sql);
+
     res.json({
       success: true,
       date: new Date().toISOString().split('T')[0],
       data: result.rows
     });
+
   } catch (error) {
     console.error('❌ Erreur réservations aujourd\'hui:', error);
     res.status(500).json({
