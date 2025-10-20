@@ -57,7 +57,7 @@ router.get('/dashboard', async (req, res) => {
         COALESCE(SUM(CASE WHEN datereservation >= $1 AND datereservation < $2 
           AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_periode,
         
-        -- Revenus année en cours (toujours utile)
+        -- Revenus année en cours
         COALESCE(SUM(CASE WHEN datereservation >= date_trunc('year', CURRENT_DATE) 
           AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_annee,
         
@@ -84,39 +84,67 @@ router.get('/dashboard', async (req, res) => {
       WHERE statut = 'confirmée'
     `;
 
-    // 2. Taux de remplissage - ADAPTÉ À LA PÉRIODE
-    const remplissageSql = periode === 'jour' ? `
-      -- Taux de remplissage pour aujourd'hui
-      WITH stats_terrains AS (
+    // 2. TAUX DE REMPLISSAGE CORRIGÉ
+    const remplissageSql = `
+      WITH heures_par_jour AS (
+        -- Heures d'ouverture par jour (ex: 8h-20h = 12 heures)
+        SELECT 12 as heures_ouverture_par_jour
+      ),
+      jours_ouvres AS (
+        -- Nombre de jours dans la période
         SELECT 
-          COUNT(DISTINCT numeroterrain) as nb_terrains_utilises,
-          COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) as heures_reservees
+          CASE 
+            WHEN $3 = 'jour' THEN 1
+            WHEN $3 = 'semaine' THEN 7
+            WHEN $3 = 'mois' THEN EXTRACT(DAYS FROM ($2::date - $1::date))
+            WHEN $3 = 'annee' THEN 365
+            ELSE 30
+          END as nb_jours
+      ),
+      terrains_total AS (
+        -- Nombre total de terrains disponibles
+        SELECT COUNT(DISTINCT numeroterrain) as nb_terrains
         FROM reservation 
-        WHERE statut = 'confirmée' 
-          AND datereservation = CURRENT_DATE
+        WHERE statut = 'confirmée'
+      ),
+      heures_reservees AS (
+        -- Heures totales réservées dans la période
+        SELECT 
+          COALESCE(SUM(
+            EXTRACT(EPOCH FROM (
+              MAKE_TIME(SPLIT_PART(heurefin, ':', 1)::int, SPLIT_PART(heurefin, ':', 2)::int, 0) -
+              MAKE_TIME(SPLIT_PART(heurereservation, ':', 1)::int, SPLIT_PART(heurereservation, ':', 2)::int, 0)
+            )/3600
+          ), 0) as total_heures
+        FROM reservation 
+        WHERE statut = 'confirmée'
+          AND datereservation >= $1 AND datereservation < $2
+      ),
+      terrains_utilises AS (
+        -- Nombre de terrains utilisés dans la période
+        SELECT COUNT(DISTINCT numeroterrain) as nb_terrains_utilises
+        FROM reservation 
+        WHERE statut = 'confirmée'
+          AND datereservation >= $1 AND datereservation < $2
       )
       SELECT 
+        -- Taux de remplissage = (heures réservées / capacité totale disponible) * 100
         CASE 
-          WHEN nb_terrains_utilises > 0 THEN
-            CAST(
-              (heures_reservees / (nb_terrains_utilises * 12)) * 100 AS NUMERIC(10,1)
+          WHEN (SELECT nb_terrains FROM terrains_total) > 0 AND (SELECT nb_jours FROM jours_ouvres) > 0 THEN
+            ROUND(
+              ((SELECT total_heures FROM heures_reservees) / 
+               ((SELECT nb_terrains FROM terrains_total) * 
+                (SELECT heures_ouverture_par_jour FROM heures_par_jour) * 
+                (SELECT nb_jours FROM jours_ouvres))) * 100, 
+              1
             )
           ELSE 0 
         END AS taux_remplissage,
-        nb_terrains_utilises,
-        heures_reservees
-      FROM stats_terrains
-    ` : `
-      -- Taux de remplissage moyen pour les autres périodes
-      SELECT 
-        CAST(
-          (COUNT(*) * 100.0 / (SELECT COUNT(DISTINCT numeroterrain) FROM reservation WHERE statut = 'confirmée'))
-        AS NUMERIC(10,1)) AS taux_remplissage,
-        COUNT(DISTINCT numeroterrain) as nb_terrains_utilises,
-        COUNT(*) as heures_reservees
-      FROM reservation 
-      WHERE statut = 'confirmée'
-        AND datereservation >= $1 AND datereservation < $2
+        (SELECT nb_terrains_utilises FROM terrains_utilises) as nb_terrains_utilises,
+        (SELECT total_heures FROM heures_reservees) as heures_reservees,
+        (SELECT nb_terrains FROM terrains_total) as nb_terrains_total,
+        (SELECT heures_ouverture_par_jour FROM heures_par_jour) as heures_ouverture_par_jour,
+        (SELECT nb_jours FROM jours_ouvres) as nb_jours_periode
     `;
 
     // 3. Tendances - COMPARAISON AVEC PÉRIODE PRÉCÉDENTE
@@ -198,7 +226,7 @@ router.get('/dashboard', async (req, res) => {
         END AS trend_clients
     `;
 
-    // 4. Réservations à venir (toujours utile)
+    // 4. Réservations à venir
     const reservationsProchainesSql = `
       SELECT 
         datereservation,
@@ -228,21 +256,40 @@ router.get('/dashboard', async (req, res) => {
       LIMIT 5
     `;
 
+    // 6. Statistiques par terrain
+    const statsTerrainsSql = `
+      SELECT 
+        numeroterrain,
+        nomterrain,
+        COUNT(*) as nb_reservations,
+        COALESCE(SUM(tarif), 0) as revenus,
+        COALESCE(SUM(
+          EXTRACT(EPOCH FROM (
+            MAKE_TIME(SPLIT_PART(heurefin, ':', 1)::int, SPLIT_PART(heurefin, ':', 2)::int, 0) -
+            MAKE_TIME(SPLIT_PART(heurereservation, ':', 1)::int, SPLIT_PART(heurereservation, ':', 2)::int, 0)
+          )/3600
+        ), 0) as heures_utilisees
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation >= $1 AND datereservation < $2
+      GROUP BY numeroterrain, nomterrain
+      ORDER BY revenus DESC
+    `;
+
     // Exécution des requêtes avec les paramètres de période
     const [
       statsPrincipalesResult,
       remplissageResult,
       tendancesResult,
       reservationsProchainesResult,
-      topClientsResult
+      topClientsResult,
+      statsTerrainsResult
     ] = await Promise.all([
       // Stats principales
       db.query(statsPrincipalesSql, [currentRange.start, currentRange.end]),
       
-      // Remplissage (paramètres différents selon la période)
-      periode === 'jour' 
-        ? db.query(remplissageSql)
-        : db.query(remplissageSql, [currentRange.start, currentRange.end]),
+      // Remplissage CORRIGÉ
+      db.query(remplissageSql, [currentRange.start, currentRange.end, periode]),
       
       // Tendances (comparaison avec période précédente)
       db.query(tendancesSql, [
@@ -254,8 +301,26 @@ router.get('/dashboard', async (req, res) => {
       db.query(reservationsProchainesSql),
       
       // Top clients
-      db.query(topClientsSql)
+      db.query(topClientsSql),
+      
+      // Stats par terrain
+      db.query(statsTerrainsSql, [currentRange.start, currentRange.end])
     ]);
+
+    // Calcul du taux de remplissage alternatif si le premier calcul échoue
+    let tauxRemplissage = parseFloat(remplissageResult.rows[0].taux_remplissage) || 0;
+    
+    // Si le taux est anormal (trop élevé ou trop bas), utiliser un calcul de secours
+    if (tauxRemplissage > 100 || tauxRemplissage < 0) {
+      const heuresReservees = parseFloat(remplissageResult.rows[0].heures_reservees) || 0;
+      const nbTerrainsTotal = parseInt(remplissageResult.rows[0].nb_terrains_total) || 1;
+      const nbJoursPeriode = parseInt(remplissageResult.rows[0].nb_jours_periode) || 30;
+      const heuresOuvertureParJour = 12; // 8h-20h
+      
+      const capaciteTotale = nbTerrainsTotal * heuresOuvertureParJour * nbJoursPeriode;
+      tauxRemplissage = capaciteTotale > 0 ? (heuresReservees / capaciteTotale) * 100 : 0;
+      tauxRemplissage = Math.min(100, Math.max(0, Math.round(tauxRemplissage * 10) / 10));
+    }
 
     // Préparation des données finales
     const data = {
@@ -270,10 +335,15 @@ router.get('/dashboard', async (req, res) => {
       clients_actifs: parseInt(statsPrincipalesResult.rows[0].clients_actifs) || 0,
       nb_terrains_total: parseInt(statsPrincipalesResult.rows[0].nb_terrains_total) || 0,
       
-      // Performance
-      taux_remplissage: parseFloat(remplissageResult.rows[0].taux_remplissage) || 0,
+      // Performance CORRIGÉE
+      taux_remplissage: tauxRemplissage,
       nb_terrains_utilises: parseInt(remplissageResult.rows[0].nb_terrains_utilises) || 0,
       heures_reservees: parseFloat(remplissageResult.rows[0].heures_reservees) || 0,
+      details_remplissage: {
+        nb_terrains_total: parseInt(remplissageResult.rows[0].nb_terrains_total) || 0,
+        heures_ouverture_par_jour: parseInt(remplissageResult.rows[0].heures_ouverture_par_jour) || 12,
+        nb_jours_periode: parseInt(remplissageResult.rows[0].nb_jours_periode) || 30
+      },
       
       // Tendances
       trends: {
@@ -294,6 +364,7 @@ router.get('/dashboard', async (req, res) => {
       // Données supplémentaires
       reservations_prochaines: reservationsProchainesResult.rows,
       top_clients: topClientsResult.rows,
+      stats_terrains: statsTerrainsResult.rows,
       
       // Métriques calculées
       metriques: {
@@ -302,6 +373,9 @@ router.get('/dashboard', async (req, res) => {
           : 0,
         taux_confirmation_aujourdhui: statsPrincipalesResult.rows[0].reservations_aujourdhui > 0
           ? (parseInt(statsPrincipalesResult.rows[0].confirmes_aujourdhui) / parseInt(statsPrincipalesResult.rows[0].reservations_aujourdhui)) * 100
+          : 0,
+        revenu_moyen_par_terrain: statsPrincipalesResult.rows[0].nb_terrains_total > 0
+          ? parseFloat(statsPrincipalesResult.rows[0].revenus_periode) / parseInt(statsPrincipalesResult.rows[0].nb_terrains_total)
           : 0
       }
     };
@@ -833,6 +907,59 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur réservations aujourd\'hui:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 NOUVELLE ROUTE: Statistiques détaillées d'occupation
+router.get('/stats/occupation', async (req, res) => {
+  try {
+    const { date_debut, date_fin } = req.query;
+    
+    const startDate = date_debut || new Date().toISOString().split('T')[0];
+    const endDate = date_fin || new Date().toISOString().split('T')[0];
+
+    const sql = `
+      WITH stats_detaillees AS (
+        SELECT 
+          numeroterrain,
+          nomterrain,
+          COUNT(*) as nb_reservations,
+          COALESCE(SUM(
+            EXTRACT(EPOCH FROM (
+              MAKE_TIME(SPLIT_PART(heurefin, ':', 1)::int, SPLIT_PART(heurefin, ':', 2)::int, 0) -
+              MAKE_TIME(SPLIT_PART(heurereservation, ':', 1)::int, SPLIT_PART(heurereservation, ':', 2)::int, 0)
+            )/3600
+          ), 0) as heures_reservees,
+          COALESCE(SUM(tarif), 0) as revenus
+        FROM reservation 
+        WHERE statut = 'confirmée'
+          AND datereservation >= $1 AND datereservation <= $2
+        GROUP BY numeroterrain, nomterrain
+      )
+      SELECT 
+        *,
+        ROUND(
+          (heures_reservees / (12 * (DATE_PART('days', $2::date - $1::date) + 1))) * 100, 
+          1
+        ) as taux_occupation_terrain
+      FROM stats_detaillees
+      ORDER BY taux_occupation_terrain DESC
+    `;
+
+    const result = await db.query(sql, [startDate, endDate]);
+    
+    res.json({
+      success: true,
+      periode: { date_debut: startDate, date_fin: endDate },
+      data: result.rows
+    });
+  } catch (error) {
+    console.error('❌ Erreur stats occupation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
