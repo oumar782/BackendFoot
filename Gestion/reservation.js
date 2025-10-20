@@ -12,6 +12,7 @@ router.get('/revenus-totaux', async (req, res) => {
     let sql = '';
     let params = [];
     let periodeCondition = '';
+    
     if (date_debut && date_fin) {
       periodeCondition = `AND datereservation BETWEEN $1 AND $2`;
       params = [date_debut, date_fin];
@@ -30,6 +31,7 @@ router.get('/revenus-totaux', async (req, res) => {
           periodeCondition = `AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
       }
     }
+    
     sql = `
       SELECT 
         COALESCE(SUM(tarif), 0) AS revenu_total,
@@ -42,6 +44,7 @@ router.get('/revenus-totaux', async (req, res) => {
       WHERE statut = 'confirmée'
       ${periodeCondition}
     `;
+    
     const result = await db.query(sql, params);
     res.json({
       success: true,
@@ -65,6 +68,7 @@ router.get('/previsions/revenus', async (req, res) => {
   try {
     const { type = 'mensuel' } = req.query;
     let sql = '';
+    
     switch (type) {
       case 'journalier':
         sql = `
@@ -173,6 +177,7 @@ router.get('/previsions/revenus', async (req, res) => {
           ORDER BY ms.debut_mois ASC
         `;
     }
+    
     const result = await db.query(sql);
     const stats = {
       revenu_total_prevue: result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_prevue), 0),
@@ -181,6 +186,7 @@ router.get('/previsions/revenus', async (req, res) => {
       periode_max_revenu: result.rows.reduce((max, row) => parseFloat(row.revenu_prevue) > parseFloat(max.revenu_prevue) ? row : max, result.rows[0]),
       periode_min_revenu: result.rows.reduce((min, row) => parseFloat(row.revenu_prevue) < parseFloat(min.revenu_prevue) ? row : min, result.rows[0])
     };
+    
     res.json({
       success: true,
       type_prevision: type,
@@ -206,6 +212,7 @@ router.get('/taux-remplissage', async (req, res) => {
   try {
     const { type = 'mensuel' } = req.query;
     let sql = '';
+    
     switch (type) {
       case 'journalier':
         sql = `
@@ -331,6 +338,7 @@ router.get('/taux-remplissage', async (req, res) => {
           ORDER BY ms.debut_mois ASC
         `;
     }
+    
     const result = await db.query(sql);
     const stats = {
       taux_remplissage_moyen: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.taux_remplissage), 0) / result.rows.length),
@@ -338,6 +346,7 @@ router.get('/taux-remplissage', async (req, res) => {
       periode_min_remplissage: result.rows.reduce((min, row) => parseFloat(row.taux_remplissage) < parseFloat(min.taux_remplissage) ? row : min, result.rows[0]),
       jours_occupes_total: result.rows.reduce((sum, row) => sum + parseInt(row.jours_occupes || 0), 0)
     };
+    
     res.json({
       success: true,
       type_remplissage: type,
@@ -369,18 +378,21 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         AND heurereservation <= CURRENT_TIME
         AND heurefin >= CURRENT_TIME
     `;
+    
     const annulationsSemaineSql = `
       SELECT COUNT(*) AS annulations_semaine
       FROM reservation 
       WHERE statut = 'annulée'
         AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
     `;
+    
     const terrainsActifsSql = `
       SELECT COUNT(DISTINCT numeroterrain) AS terrains_actifs_semaine
       FROM reservation 
       WHERE statut = 'confirmée'
         AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
     `;
+    
     const reservationsAujourdhuiSql = `
       SELECT COUNT(*) AS reservations_aujourdhui,
              COALESCE(SUM(tarif), 0) AS revenu_aujourdhui
@@ -388,6 +400,7 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       WHERE statut = 'confirmée'
         AND datereservation = CURRENT_DATE
     `;
+    
     const reservationsMoisSql = `
       SELECT COUNT(*) AS reservations_mois,
              COALESCE(SUM(tarif), 0) AS revenu_mois
@@ -407,7 +420,7 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       db.query(terrainsOccupesSql),
       db.query(annulationsSemaineSql),
       db.query(terrainsActifsSql),
-      db.query(reservationsAujourdhuiResult),
+      db.query(reservationsAujourdhuiSql),
       db.query(reservationsMoisSql)
     ]);
 
@@ -465,11 +478,13 @@ router.get('/previsions/occupation', async (req, res) => {
         AND datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
       GROUP BY datereservation
     `;
+    
     if (top) {
       sql += ` ORDER BY taux_occupation_prevu DESC, heures_reservees DESC LIMIT $1`;
     } else {
       sql += ` ORDER BY datereservation ASC`;
     }
+    
     const result = await db.query(sql, top ? [parseInt(top)] : []);
 
     const stats = {
@@ -478,6 +493,7 @@ router.get('/previsions/occupation', async (req, res) => {
       revenu_total_attendu: 0,
       reservations_total: 0
     };
+    
     if (result.rows.length > 0) {
       stats.moyenne_occupation = Math.round(
         result.rows.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / result.rows.length
@@ -562,6 +578,7 @@ router.get('/previsions/detaillees', async (req, res) => {
       LEFT JOIN tendances t ON rj.datereservation = t.datereservation
       ORDER BY rj.datereservation ASC
     `;
+    
     const result = await db.query(sql);
 
     const today = new Date();
@@ -577,6 +594,7 @@ router.get('/previsions/detaillees', async (req, res) => {
       const reservationExistante = result.rows.find(row => 
         row.datereservation.toISOString().split('T')[0] === dateStr
       );
+      
       if (reservationExistante) {
         toutesLesDates.push(reservationExistante);
       } else {
@@ -639,7 +657,7 @@ router.get('/previsions/detaillees', async (req, res) => {
   }
 });
 
-// 📧 GESTION DES EMAILS - VERSION AMÉLIORÉE
+// 📧 GESTION DES EMAILS
 
 // 📌 Route pour vérifier la configuration email
 router.get('/email/config', async (req, res) => {
@@ -659,7 +677,7 @@ router.get('/email/config', async (req, res) => {
   }
 });
 
-// 📌 Route pour tester l'envoi d'email - VERSION SIMPLIFIÉE
+// 📌 Route pour tester l'envoi d'email
 router.post('/email/test', async (req, res) => {
   try {
     const { email } = req.body;
@@ -694,6 +712,7 @@ router.post('/email/test', async (req, res) => {
 
     console.log('🧪 TEST EMAIL MANUEL vers:', email);
     const result = await sendReservationConfirmation(testReservation);
+    
     if (result.success) {
       res.json({
         success: true,
@@ -721,7 +740,7 @@ router.post('/email/test', async (req, res) => {
   }
 });
 
-// 🎯 GESTION DES RÉSERVATIONS - AVEC GESTION EMAIL AMÉLIORÉE
+// 🎯 GESTION DES RÉSERVATIONS
 
 // 📌 Route pour récupérer les réservations (avec ou sans filtres)
 router.get('/', async (req, res) => {
@@ -885,13 +904,13 @@ router.post('/', async (req, res) => {
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
 
-    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL
+    // Gestion de l'envoi d'email
     let emailResult = null;
     const shouldSendEmail = statut === 'confirmée' && email && email.includes('@');
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Tentative d'envoi d'email de confirmation à: ${email}`);
-        console.log(`🏟️ Réservation pour: ${nomterrain || 'Terrain ' + numeroterrain}`);
         emailResult = await sendReservationConfirmation(newReservation);
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
@@ -991,6 +1010,7 @@ router.put('/:id', async (req, res) => {
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = email && email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation (mise à jour) à: ${email}`);
@@ -1090,6 +1110,7 @@ router.put('/:id/statut', async (req, res) => {
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = reservation.email && reservation.email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation (changement statut) à: ${reservation.email}`);
