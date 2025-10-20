@@ -1,394 +1,65 @@
 import express from 'express';
 import db from '../db.js';
 import { sendReservationConfirmation, checkEmailConfiguration } from '../services/emailService.js';
+
 const router = express.Router();
 
-router.get('/dashboard', async (req, res) => {
+// 📊 STATISTIQUES ET ANALYTIQUES
+
+// 📌 Route pour récupérer les revenus totaux
+router.get('/revenus-totaux', async (req, res) => {
   try {
-    const { periode = 'mois' } = req.query;
-
-    // Fonction pour obtenir les dates selon la période
-    const getDateRange = (period) => {
-      const now = new Date();
-      switch (period) {
-        case 'jour':
-          return {
-            start: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-            end: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1),
-            previousStart: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1),
-            previousEnd: new Date(now.getFullYear(), now.getMonth(), now.getDate())
-          };
-        case 'semaine':
-          const startOfWeek = new Date(now);
-          startOfWeek.setDate(now.getDate() - now.getDay() + 1); // Lundi
-          return {
-            start: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate()),
-            end: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() + 7),
-            previousStart: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() - 7),
-            previousEnd: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate())
-          };
-        case 'annee':
-          return {
-            start: new Date(now.getFullYear(), 0, 1),
-            end: new Date(now.getFullYear() + 1, 0, 1),
-            previousStart: new Date(now.getFullYear() - 1, 0, 1),
-            previousEnd: new Date(now.getFullYear(), 0, 1)
-          };
-        case 'mois':
-        default:
-          return {
-            start: new Date(now.getFullYear(), now.getMonth(), 1),
-            end: new Date(now.getFullYear(), now.getMonth() + 1, 1),
-            previousStart: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-            previousEnd: new Date(now.getFullYear(), now.getMonth(), 1)
-          };
-      }
-    };
-
-    const currentRange = getDateRange(periode);
-    const previousRange = getDateRange(periode === 'mois' ? 'mois' : 
-                                    periode === 'semaine' ? 'semaine' : 
-                                    periode === 'annee' ? 'annee' : 'jour');
-
-    // 1. Statistiques principales - AVEC PÉRIODE DYNAMIQUE
-    const statsPrincipalesSql = `
-      SELECT 
-        -- Revenus période actuelle
-        COALESCE(SUM(CASE WHEN datereservation >= $1 AND datereservation < $2 
-          AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_periode,
-        
-        -- Revenus année en cours
-        COALESCE(SUM(CASE WHEN datereservation >= date_trunc('year', CURRENT_DATE) 
-          AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_annee,
-        
-        -- Revenus aujourd'hui
-        COALESCE(SUM(CASE WHEN datereservation = CURRENT_DATE 
-          AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_aujourdhui,
-        
-        -- Réservations période actuelle
-        COUNT(CASE WHEN datereservation >= $1 AND datereservation < $2 
-          AND statut = 'confirmée' THEN 1 END) AS reservations_periode,
-        
-        -- Réservations aujourd'hui
-        COUNT(CASE WHEN datereservation = CURRENT_DATE 
-          AND statut = 'confirmée' THEN 1 END) AS confirmes_aujourdhui,
-        COUNT(CASE WHEN datereservation = CURRENT_DATE THEN 1 END) AS reservations_aujourdhui,
-        
-        -- Clients actifs (30 derniers jours)
-        COUNT(DISTINCT CASE WHEN datereservation >= CURRENT_DATE - INTERVAL '30 days' 
-          AND statut = 'confirmée' THEN email END) AS clients_actifs,
-        
-        -- Terrains
-        COUNT(DISTINCT numeroterrain) AS nb_terrains_total
-      FROM reservation
-      WHERE statut = 'confirmée'
-    `;
-
-    // 2. TAUX DE REMPLISSAGE CORRIGÉ
-    const remplissageSql = `
-      WITH heures_par_jour AS (
-        -- Heures d'ouverture par jour (ex: 8h-20h = 12 heures)
-        SELECT 12 as heures_ouverture_par_jour
-      ),
-      jours_ouvres AS (
-        -- Nombre de jours dans la période
-        SELECT 
-          CASE 
-            WHEN $3 = 'jour' THEN 1
-            WHEN $3 = 'semaine' THEN 7
-            WHEN $3 = 'mois' THEN EXTRACT(DAYS FROM ($2::date - $1::date))
-            WHEN $3 = 'annee' THEN 365
-            ELSE 30
-          END as nb_jours
-      ),
-      terrains_total AS (
-        -- Nombre total de terrains disponibles
-        SELECT COUNT(DISTINCT numeroterrain) as nb_terrains
-        FROM reservation 
-        WHERE statut = 'confirmée'
-      ),
-      heures_reservees AS (
-        -- Heures totales réservées dans la période
-        SELECT 
-          COALESCE(SUM(
-            EXTRACT(EPOCH FROM (
-              MAKE_TIME(SPLIT_PART(heurefin, ':', 1)::int, SPLIT_PART(heurefin, ':', 2)::int, 0) -
-              MAKE_TIME(SPLIT_PART(heurereservation, ':', 1)::int, SPLIT_PART(heurereservation, ':', 2)::int, 0)
-            )/3600
-          ), 0) as total_heures
-        FROM reservation 
-        WHERE statut = 'confirmée'
-          AND datereservation >= $1 AND datereservation < $2
-      ),
-      terrains_utilises AS (
-        -- Nombre de terrains utilisés dans la période
-        SELECT COUNT(DISTINCT numeroterrain) as nb_terrains_utilises
-        FROM reservation 
-        WHERE statut = 'confirmée'
-          AND datereservation >= $1 AND datereservation < $2
-      )
-      SELECT 
-        -- Taux de remplissage = (heures réservées / capacité totale disponible) * 100
-        CASE 
-          WHEN (SELECT nb_terrains FROM terrains_total) > 0 AND (SELECT nb_jours FROM jours_ouvres) > 0 THEN
-            ROUND(
-              ((SELECT total_heures FROM heures_reservees) / 
-               ((SELECT nb_terrains FROM terrains_total) * 
-                (SELECT heures_ouverture_par_jour FROM heures_par_jour) * 
-                (SELECT nb_jours FROM jours_ouvres))) * 100, 
-              1
-            )
-          ELSE 0 
-        END AS taux_remplissage,
-        (SELECT nb_terrains_utilises FROM terrains_utilises) as nb_terrains_utilises,
-        (SELECT total_heures FROM heures_reservees) as heures_reservees,
-        (SELECT nb_terrains FROM terrains_total) as nb_terrains_total,
-        (SELECT heures_ouverture_par_jour FROM heures_par_jour) as heures_ouverture_par_jour,
-        (SELECT nb_jours FROM jours_ouvres) as nb_jours_periode
-    `;
-
-    // 3. Tendances - COMPARAISON AVEC PÉRIODE PRÉCÉDENTE
-    const tendancesSql = `
-      -- Revenus
-      WITH revenus_actuels AS (
-        SELECT COALESCE(SUM(tarif), 0) AS total
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation >= $1 AND datereservation < $2
-      ),
-      revenus_precedents AS (
-        SELECT COALESCE(SUM(tarif), 0) AS total
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation >= $3 AND datereservation < $4
-      ),
-      
-      -- Réservations
-      reservations_actuelles AS (
-        SELECT COUNT(*) AS total
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation >= $1 AND datereservation < $2
-      ),
-      reservations_precedentes AS (
-        SELECT COUNT(*) AS total
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation >= $3 AND datereservation < $4
-      ),
-      
-      -- Clients
-      clients_actuels AS (
-        SELECT COUNT(DISTINCT email) AS total
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation >= $1 AND datereservation < $2
-      ),
-      clients_precedents AS (
-        SELECT COUNT(DISTINCT email) AS total
-        FROM reservation
-        WHERE statut = 'confirmée'
-          AND datereservation >= $3 AND datereservation < $4
-      )
-      
-      SELECT 
-        -- Trend revenus
-        CASE 
-          WHEN (SELECT total FROM revenus_precedents) > 0 THEN
-            CAST(
-              (((SELECT total FROM revenus_actuels) - (SELECT total FROM revenus_precedents)) / 
-              (SELECT total FROM revenus_precedents) * 100) AS NUMERIC(10,1)
-            )
-          ELSE 
-            CASE WHEN (SELECT total FROM revenus_actuels) > 0 THEN 100.0 ELSE 0.0 END
-        END AS trend_revenus,
-        
-        -- Trend réservations
-        CASE 
-          WHEN (SELECT total FROM reservations_precedentes) > 0 THEN
-            CAST(
-              (((SELECT total FROM reservations_actuelles) - (SELECT total FROM reservations_precedentes)) / 
-              (SELECT total FROM reservations_precedentes) * 100) AS NUMERIC(10,1)
-            )
-          ELSE 
-            CASE WHEN (SELECT total FROM reservations_actuelles) > 0 THEN 100.0 ELSE 0.0 END
-        END AS trend_reservations,
-        
-        -- Trend clients
-        CASE 
-          WHEN (SELECT total FROM clients_precedents) > 0 THEN
-            CAST(
-              (((SELECT total FROM clients_actuels) - (SELECT total FROM clients_precedents)) / 
-              (SELECT total FROM clients_precedents) * 100) AS NUMERIC(10,1)
-            )
-          ELSE 
-            CASE WHEN (SELECT total FROM clients_actuels) > 0 THEN 100.0 ELSE 0.0 END
-        END AS trend_clients
-    `;
-
-    // 4. Réservations à venir
-    const reservationsProchainesSql = `
-      SELECT 
-        datereservation,
-        COUNT(*) as nb_reservations,
-        COALESCE(SUM(tarif), 0) as revenu_prevue,
-        COUNT(DISTINCT numeroterrain) as terrains_occupes
-      FROM reservation
-      WHERE statut = 'confirmée'
-        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-      GROUP BY datereservation
-      ORDER BY datereservation ASC
-    `;
-
-    // 5. Top clients
-    const topClientsSql = `
-      SELECT 
-        email,
-        nomclient,
-        COUNT(*) as nb_reservations,
-        COALESCE(SUM(tarif), 0) as total_depense,
-        MAX(datereservation) as derniere_reservation
-      FROM reservation
-      WHERE statut = 'confirmée'
-        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-      GROUP BY email, nomclient
-      ORDER BY nb_reservations DESC, total_depense DESC
-      LIMIT 5
-    `;
-
-    // 6. Statistiques par terrain
-    const statsTerrainsSql = `
-      SELECT 
-        numeroterrain,
-        nomterrain,
-        COUNT(*) as nb_reservations,
-        COALESCE(SUM(tarif), 0) as revenus,
-        COALESCE(SUM(
-          EXTRACT(EPOCH FROM (
-            MAKE_TIME(SPLIT_PART(heurefin, ':', 1)::int, SPLIT_PART(heurefin, ':', 2)::int, 0) -
-            MAKE_TIME(SPLIT_PART(heurereservation, ':', 1)::int, SPLIT_PART(heurereservation, ':', 2)::int, 0)
-          )/3600
-        ), 0) as heures_utilisees
-      FROM reservation 
-      WHERE statut = 'confirmée'
-        AND datereservation >= $1 AND datereservation < $2
-      GROUP BY numeroterrain, nomterrain
-      ORDER BY revenus DESC
-    `;
-
-    // Exécution des requêtes avec les paramètres de période
-    const [
-      statsPrincipalesResult,
-      remplissageResult,
-      tendancesResult,
-      reservationsProchainesResult,
-      topClientsResult,
-      statsTerrainsResult
-    ] = await Promise.all([
-      // Stats principales
-      db.query(statsPrincipalesSql, [currentRange.start, currentRange.end]),
-      
-      // Remplissage CORRIGÉ
-      db.query(remplissageSql, [currentRange.start, currentRange.end, periode]),
-      
-      // Tendances (comparaison avec période précédente)
-      db.query(tendancesSql, [
-        currentRange.start, currentRange.end,
-        previousRange.start, previousRange.end
-      ]),
-      
-      // Réservations à venir
-      db.query(reservationsProchainesSql),
-      
-      // Top clients
-      db.query(topClientsSql),
-      
-      // Stats par terrain
-      db.query(statsTerrainsSql, [currentRange.start, currentRange.end])
-    ]);
-
-    // Calcul du taux de remplissage alternatif si le premier calcul échoue
-    let tauxRemplissage = parseFloat(remplissageResult.rows[0].taux_remplissage) || 0;
+    const { periode = 'mois', date_debut, date_fin } = req.query;
     
-    // Si le taux est anormal (trop élevé ou trop bas), utiliser un calcul de secours
-    if (tauxRemplissage > 100 || tauxRemplissage < 0) {
-      const heuresReservees = parseFloat(remplissageResult.rows[0].heures_reservees) || 0;
-      const nbTerrainsTotal = parseInt(remplissageResult.rows[0].nb_terrains_total) || 1;
-      const nbJoursPeriode = parseInt(remplissageResult.rows[0].nb_jours_periode) || 30;
-      const heuresOuvertureParJour = 12; // 8h-20h
-      
-      const capaciteTotale = nbTerrainsTotal * heuresOuvertureParJour * nbJoursPeriode;
-      tauxRemplissage = capaciteTotale > 0 ? (heuresReservees / capaciteTotale) * 100 : 0;
-      tauxRemplissage = Math.min(100, Math.max(0, Math.round(tauxRemplissage * 10) / 10));
+    let sql = '';
+    let params = [];
+    
+    let periodeCondition = '';
+    if (date_debut && date_fin) {
+      periodeCondition = `AND datereservation BETWEEN $1 AND $2`;
+      params = [date_debut, date_fin];
+    } else {
+      switch (periode) {
+        case 'jour':
+          periodeCondition = `AND datereservation = CURRENT_DATE`;
+          break;
+        case 'semaine':
+          periodeCondition = `AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'`;
+          break;
+        case 'mois':
+          periodeCondition = `AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+          break;
+        default:
+          periodeCondition = `AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'`;
+      }
     }
 
-    // Préparation des données finales
-    const data = {
-      // Statistiques principales
-      revenus_mois: parseFloat(statsPrincipalesResult.rows[0].revenus_periode) || 0,
-      revenus_annee: parseFloat(statsPrincipalesResult.rows[0].revenus_annee) || 0,
-      revenus_aujourdhui: parseFloat(statsPrincipalesResult.rows[0].revenus_aujourdhui) || 0,
-      
-      reservations_mois: parseInt(statsPrincipalesResult.rows[0].reservations_periode) || 0,
-      confirmes_aujourdhui: parseInt(statsPrincipalesResult.rows[0].confirmes_aujourdhui) || 0,
-      reservations_aujourdhui: parseInt(statsPrincipalesResult.rows[0].reservations_aujourdhui) || 0,
-      clients_actifs: parseInt(statsPrincipalesResult.rows[0].clients_actifs) || 0,
-      nb_terrains_total: parseInt(statsPrincipalesResult.rows[0].nb_terrains_total) || 0,
-      
-      // Performance CORRIGÉE
-      taux_remplissage: tauxRemplissage,
-      nb_terrains_utilises: parseInt(remplissageResult.rows[0].nb_terrains_utilises) || 0,
-      heures_reservees: parseFloat(remplissageResult.rows[0].heures_reservees) || 0,
-      details_remplissage: {
-        nb_terrains_total: parseInt(remplissageResult.rows[0].nb_terrains_total) || 0,
-        heures_ouverture_par_jour: parseInt(remplissageResult.rows[0].heures_ouverture_par_jour) || 12,
-        nb_jours_periode: parseInt(remplissageResult.rows[0].nb_jours_periode) || 30
-      },
-      
-      // Tendances
-      trends: {
-        revenus: {
-          value: Math.abs(parseFloat(tendancesResult.rows[0].trend_revenus) || 0),
-          isPositive: parseFloat(tendancesResult.rows[0].trend_revenus) >= 0
-        },
-        reservations: {
-          value: Math.abs(parseFloat(tendancesResult.rows[0].trend_reservations) || 0),
-          isPositive: parseFloat(tendancesResult.rows[0].trend_reservations) >= 0
-        },
-        clients: {
-          value: Math.abs(parseFloat(tendancesResult.rows[0].trend_clients) || 0),
-          isPositive: parseFloat(tendancesResult.rows[0].trend_clients) >= 0
-        }
-      },
-      
-      // Données supplémentaires
-      reservations_prochaines: reservationsProchainesResult.rows,
-      top_clients: topClientsResult.rows,
-      stats_terrains: statsTerrainsResult.rows,
-      
-      // Métriques calculées
-      metriques: {
-        revenu_moyen_par_reservation: statsPrincipalesResult.rows[0].reservations_periode > 0 
-          ? parseFloat(statsPrincipalesResult.rows[0].revenus_periode) / parseInt(statsPrincipalesResult.rows[0].reservations_periode)
-          : 0,
-        taux_confirmation_aujourdhui: statsPrincipalesResult.rows[0].reservations_aujourdhui > 0
-          ? (parseInt(statsPrincipalesResult.rows[0].confirmes_aujourdhui) / parseInt(statsPrincipalesResult.rows[0].reservations_aujourdhui)) * 100
-          : 0,
-        revenu_moyen_par_terrain: statsPrincipalesResult.rows[0].nb_terrains_total > 0
-          ? parseFloat(statsPrincipalesResult.rows[0].revenus_periode) / parseInt(statsPrincipalesResult.rows[0].nb_terrains_total)
-          : 0
-      }
-    };
+    sql = `
+      SELECT 
+        COALESCE(SUM(tarif), 0) AS revenu_total,
+        COUNT(*) AS nb_reservations,
+        COUNT(DISTINCT datereservation) AS nb_jours_avec_reservations,
+        ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation,
+        MAX(tarif) AS revenu_max,
+        MIN(tarif) AS revenu_min,
+        COUNT(DISTINCT idclient) AS nb_clients_uniques
+      FROM reservation 
+      WHERE statut = 'confirmée'
+      ${periodeCondition}
+    `;
+
+    const result = await db.query(sql, params);
 
     res.json({
       success: true,
       periode: periode,
-      date_actualisation: new Date().toISOString(),
-      data: data
+      date_debut: date_debut || new Date().toISOString().split('T')[0],
+      date_fin: date_fin || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ Erreur dashboard:', error);
+    console.error('❌ Erreur récupération revenus totaux:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -397,12 +68,628 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// 📧 GESTION DES EMAILS
+// 📌 Route pour les prévisions de revenus
+router.get('/previsions/revenus', async (req, res) => {
+  try {
+    const { type = 'mensuel' } = req.query;
+
+    let sql = '';
+    
+    switch (type) {
+      case 'journalier':
+        sql = `
+          WITH dates_series AS (
+            SELECT generate_series(
+              CURRENT_DATE, 
+              CURRENT_DATE + INTERVAL '30 days', 
+              '1 day'::interval
+            )::date AS date_jour
+          ),
+          revenus_jour AS (
+            SELECT 
+              datereservation,
+              COALESCE(SUM(tarif), 0) AS revenu_journalier,
+              COUNT(*) AS nb_reservations
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+            GROUP BY datereservation
+          )
+          SELECT 
+            ds.date_jour AS date,
+            TO_CHAR(ds.date_jour, 'DD/MM') AS date_formattee,
+            EXTRACT(DOW FROM ds.date_jour) AS jour_semaine,
+            COALESCE(rj.revenu_journalier, 0) AS revenu_prevue,
+            COALESCE(rj.nb_reservations, 0) AS reservations_prevues,
+            CASE 
+              WHEN COALESCE(rj.revenu_journalier, 0) >= 1000 THEN 'Élevé'
+              WHEN COALESCE(rj.revenu_journalier, 0) >= 500 THEN 'Moyen'
+              ELSE 'Faible'
+            END AS niveau_revenu
+          FROM dates_series ds
+          LEFT JOIN revenus_jour rj ON ds.date_jour = rj.datereservation
+          ORDER BY ds.date_jour ASC
+        `;
+        break;
+
+      case 'hebdomadaire':
+        sql = `
+          WITH semaines_series AS (
+            SELECT 
+              date_trunc('week', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 weeks', 
+                '1 week'::interval
+              )) AS debut_semaine
+          ),
+          revenus_semaine AS (
+            SELECT 
+              date_trunc('week', datereservation) AS debut_semaine,
+              COALESCE(SUM(tarif), 0) AS revenu_hebdomadaire,
+              COUNT(*) AS nb_reservations,
+              COUNT(DISTINCT datereservation) AS jours_occupes
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '84 days'
+            GROUP BY date_trunc('week', datereservation)
+          )
+          SELECT 
+            ss.debut_semaine AS date_debut_semaine,
+            (ss.debut_semaine + INTERVAL '6 days')::date AS date_fin_semaine,
+            TO_CHAR(ss.debut_semaine, 'DD/MM') || ' - ' || TO_CHAR(ss.debut_semaine + INTERVAL '6 days', 'DD/MM') AS periode_semaine,
+            COALESCE(rs.revenu_hebdomadaire, 0) AS revenu_prevue,
+            COALESCE(rs.nb_reservations, 0) AS reservations_prevues,
+            COALESCE(rs.jours_occupes, 0) AS jours_occupes,
+            ROUND(COALESCE(rs.revenu_hebdomadaire / NULLIF(rs.jours_occupes, 0), 0), 2) AS revenu_moyen_par_jour
+          FROM semaines_series ss
+          LEFT JOIN revenus_semaine rs ON ss.debut_semaine = rs.debut_semaine
+          ORDER BY ss.debut_semaine ASC
+        `;
+        break;
+
+      case 'mensuel':
+      default:
+        sql = `
+          WITH mois_series AS (
+            SELECT 
+              date_trunc('month', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 months', 
+                '1 month'::interval
+              )) AS debut_mois
+          ),
+          revenus_mois AS (
+            SELECT 
+              date_trunc('month', datereservation) AS debut_mois,
+              COALESCE(SUM(tarif), 0) AS revenu_mensuel,
+              COUNT(*) AS nb_reservations,
+              COUNT(DISTINCT datereservation) AS jours_occupes,
+              ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '365 days'
+            GROUP BY date_trunc('month', datereservation)
+          )
+          SELECT 
+            ms.debut_mois AS date_debut_mois,
+            (ms.debut_mois + INTERVAL '1 month - 1 day')::date AS date_fin_mois,
+            TO_CHAR(ms.debut_mois, 'MM/YYYY') AS periode_mois,
+            TO_CHAR(ms.debut_mois, 'Month YYYY') AS periode_mois_complet,
+            COALESCE(rm.revenu_mensuel, 0) AS revenu_prevue,
+            COALESCE(rm.nb_reservations, 0) AS reservations_prevues,
+            COALESCE(rm.jours_occupes, 0) AS jours_occupes,
+            COALESCE(rm.revenu_moyen_par_reservation, 0) AS revenu_moyen_par_reservation,
+            ROUND(COALESCE(rm.revenu_mensuel / NULLIF(rm.jours_occupes, 0), 0), 2) AS revenu_moyen_par_jour
+          FROM mois_series ms
+          LEFT JOIN revenus_mois rm ON ms.debut_mois = rm.debut_mois
+          ORDER BY ms.debut_mois ASC
+        `;
+    }
+
+    const result = await db.query(sql);
+
+    const stats = {
+      revenu_total_prevue: result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_prevue), 0),
+      reservations_total_prevues: result.rows.reduce((sum, row) => sum + parseInt(row.reservations_prevues), 0),
+      moyenne_revenu_par_periode: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_prevue), 0) / result.rows.length),
+      periode_max_revenu: result.rows.reduce((max, row) => parseFloat(row.revenu_prevue) > parseFloat(max.revenu_prevue) ? row : max, result.rows[0]),
+      periode_min_revenu: result.rows.reduce((min, row) => parseFloat(row.revenu_prevue) < parseFloat(min.revenu_prevue) ? row : min, result.rows[0])
+    };
+
+    res.json({
+      success: true,
+      type_prevision: type,
+      data: result.rows,
+      statistiques: stats,
+      metriques: {
+        nombre_periodes: result.rows.length,
+        date_generation: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur prévisions revenus:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour le taux de remplissage
+router.get('/taux-remplissage', async (req, res) => {
+  try {
+    const { type = 'mensuel' } = req.query;
+
+    let sql = '';
+    
+    switch (type) {
+      case 'journalier':
+        sql = `
+          WITH dates_series AS (
+            SELECT generate_series(
+              CURRENT_DATE, 
+              CURRENT_DATE + INTERVAL '30 days', 
+              '1 day'::interval
+            )::date AS date_jour
+          ),
+          occupation_jour AS (
+            SELECT 
+              datereservation,
+              COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
+              COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
+              COALESCE(COUNT(DISTINCT numeroterrain) * 12, 0) AS heures_disponibles,
+              ROUND(
+                (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+                 /
+                 NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+                ) * 100, 2
+              ) AS taux_remplissage
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+            GROUP BY datereservation
+          )
+          SELECT 
+            ds.date_jour AS date,
+            TO_CHAR(ds.date_jour, 'DD/MM') AS date_formattee,
+            EXTRACT(DOW FROM ds.date_jour) AS jour_semaine,
+            COALESCE(oj.nb_terrains_utilises, 0) AS terrains_occupes,
+            COALESCE(oj.taux_remplissage, 0) AS taux_remplissage,
+            COALESCE(oj.heures_reservees, 0) AS heures_reservees,
+            COALESCE(oj.heures_disponibles, 12) AS heures_disponibles,
+            CASE 
+              WHEN COALESCE(oj.taux_remplissage, 0) >= 80 THEN 'Élevé'
+              WHEN COALESCE(oj.taux_remplissage, 0) >= 50 THEN 'Moyen'
+              ELSE 'Faible'
+            END AS niveau_remplissage
+          FROM dates_series ds
+          LEFT JOIN occupation_jour oj ON ds.date_jour = oj.datereservation
+          ORDER BY ds.date_jour ASC
+        `;
+        break;
+
+      case 'hebdomadaire':
+        sql = `
+          WITH semaines_series AS (
+            SELECT 
+              date_trunc('week', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 weeks', 
+                '1 week'::interval
+              )) AS debut_semaine
+          ),
+          occupation_semaine AS (
+            SELECT 
+              date_trunc('week', datereservation) AS debut_semaine,
+              ROUND(AVG(
+                (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+                 /
+                 NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+                ) * 100
+              ), 2) AS taux_remplissage_moyen,
+              COUNT(DISTINCT datereservation) AS jours_occupes,
+              SUM(COUNT(DISTINCT numeroterrain)) OVER () AS total_terrains_semaine,
+              AVG(COUNT(DISTINCT numeroterrain)) AS terrains_moyen_par_jour
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '84 days'
+            GROUP BY date_trunc('week', datereservation)
+          )
+          SELECT 
+            ss.debut_semaine AS date_debut_semaine,
+            (ss.debut_semaine + INTERVAL '6 days')::date AS date_fin_semaine,
+            TO_CHAR(ss.debut_semaine, 'DD/MM') || ' - ' || TO_CHAR(ss.debut_semaine + INTERVAL '6 days', 'DD/MM') AS periode_semaine,
+            COALESCE(os.taux_remplissage_moyen, 0) AS taux_remplissage,
+            COALESCE(os.jours_occupes, 0) AS jours_occupes,
+            COALESCE(os.terrains_moyen_par_jour, 0) AS terrains_moyen_par_jour
+          FROM semaines_series ss
+          LEFT JOIN occupation_semaine os ON ss.debut_semaine = os.debut_semaine
+          ORDER BY ss.debut_semaine ASC
+        `;
+        break;
+
+      case 'mensuel':
+      default:
+        sql = `
+          WITH mois_series AS (
+            SELECT 
+              date_trunc('month', generate_series(
+                CURRENT_DATE, 
+                CURRENT_DATE + INTERVAL '12 months', 
+                '1 month'::interval
+              )) AS debut_mois
+          ),
+          occupation_mois AS (
+            SELECT 
+              date_trunc('month', datereservation) AS debut_mois,
+              ROUND(AVG(
+                (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+                 /
+                 NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+                ) * 100
+              ), 2) AS taux_remplissage_moyen,
+              COUNT(DISTINCT datereservation) AS jours_occupes,
+              AVG(COUNT(DISTINCT numeroterrain)) AS terrains_moyen_par_jour,
+              MAX(COUNT(DISTINCT numeroterrain)) AS terrains_max_par_jour
+            FROM reservation
+            WHERE statut = 'confirmée'
+              AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '365 days'
+            GROUP BY date_trunc('month', datereservation)
+          )
+          SELECT 
+            ms.debut_mois AS date_debut_mois,
+            (ms.debut_mois + INTERVAL '1 month - 1 day')::date AS date_fin_mois,
+            TO_CHAR(ms.debut_mois, 'MM/YYYY') AS periode_mois,
+            TO_CHAR(ms.debut_mois, 'Month YYYY') AS periode_mois_complet,
+            COALESCE(om.taux_remplissage_moyen, 0) AS taux_remplissage,
+            COALESCE(om.jours_occupes, 0) AS jours_occupes,
+            COALESCE(om.terrains_moyen_par_jour, 0) AS terrains_moyen_par_jour,
+            COALESCE(om.terrains_max_par_jour, 0) AS terrains_max_par_jour
+          FROM mois_series ms
+          LEFT JOIN occupation_mois om ON ms.debut_mois = om.debut_mois
+          ORDER BY ms.debut_mois ASC
+        `;
+    }
+
+    const result = await db.query(sql);
+
+    const stats = {
+      taux_remplissage_moyen: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.taux_remplissage), 0) / result.rows.length),
+      periode_max_remplissage: result.rows.reduce((max, row) => parseFloat(row.taux_remplissage) > parseFloat(max.taux_remplissage) ? row : max, result.rows[0]),
+      periode_min_remplissage: result.rows.reduce((min, row) => parseFloat(row.taux_remplissage) < parseFloat(min.taux_remplissage) ? row : min, result.rows[0]),
+      jours_occupes_total: result.rows.reduce((sum, row) => sum + parseInt(row.jours_occupes || 0), 0)
+    };
+
+    res.json({
+      success: true,
+      type_remplissage: type,
+      data: result.rows,
+      statistiques: stats,
+      metriques: {
+        nombre_periodes: result.rows.length,
+        date_generation: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur taux remplissage:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour les statistiques en temps réel
+router.get('/statistiques-temps-reel', async (req, res) => {
+  try {
+    const terrainsOccupesSql = `
+      SELECT COUNT(DISTINCT numeroterrain) AS terrains_occupes_actuels
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation = CURRENT_DATE
+        AND heurereservation <= CURRENT_TIME
+        AND heurefin >= CURRENT_TIME
+    `;
+
+    const annulationsSemaineSql = `
+      SELECT COUNT(*) AS annulations_semaine
+      FROM reservation 
+      WHERE statut = 'annulée'
+        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+    `;
+
+    const terrainsActifsSql = `
+      SELECT COUNT(DISTINCT numeroterrain) AS terrains_actifs_semaine
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
+    `;
+
+    const reservationsAujourdhuiSql = `
+      SELECT COUNT(*) AS reservations_aujourdhui,
+             COALESCE(SUM(tarif), 0) AS revenu_aujourdhui
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation = CURRENT_DATE
+    `;
+
+    const reservationsMoisSql = `
+      SELECT COUNT(*) AS reservations_mois,
+             COALESCE(SUM(tarif), 0) AS revenu_mois
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation >= date_trunc('month', CURRENT_DATE)
+        AND datereservation < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+    `;
+
+    const [
+      terrainsOccupesResult,
+      annulationsResult,
+      terrainsActifsResult,
+      reservationsAujourdhuiResult,
+      reservationsMoisResult
+    ] = await Promise.all([
+      db.query(terrainsOccupesSql),
+      db.query(annulationsSemaineSql),
+      db.query(terrainsActifsSql),
+      db.query(reservationsAujourdhuiSql),
+      db.query(reservationsMoisSql)
+    ]);
+
+    const stats = {
+      terrains_occupes_actuels: terrainsOccupesResult.rows[0]?.terrains_occupes_actuels || 0,
+      annulations_semaine: annulationsResult.rows[0]?.annulations_semaine || 0,
+      terrains_actifs_semaine: terrainsActifsResult.rows[0]?.terrains_actifs_semaine || 0,
+      reservations_aujourdhui: reservationsAujourdhuiResult.rows[0]?.reservations_aujourdhui || 0,
+      revenu_aujourdhui: reservationsAujourdhuiResult.rows[0]?.revenu_aujourdhui || 0,
+      reservations_mois: reservationsMoisResult.rows[0]?.reservations_mois || 0,
+      revenu_mois: reservationsMoisResult.rows[0]?.revenu_mois || 0,
+      date_actualisation: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      data: stats,
+      metriques: {
+        periode: 'temps_réel',
+        heure_serveur: new Date().toLocaleTimeString('fr-FR')
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur statistiques temps réel:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour récupérer les prévisions de réservations
+router.get('/previsions/occupation', async (req, res) => {
+  try {
+    const { jours = 14, top } = req.query;
+    const joursNumber = parseInt(jours);
+
+    let sql = `
+      SELECT 
+        datereservation,
+        COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
+        COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
+        COALESCE(COUNT(DISTINCT numeroterrain) * 12, 0) AS heures_disponibles,
+        ROUND(
+          (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+           /
+           NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+          ) * 100, 2
+        ) AS taux_occupation_prevu,
+        COALESCE(SUM(tarif), 0) AS revenu_attendu,
+        COUNT(*) AS nb_reservations
+      FROM reservation
+      WHERE statut = 'confirmée'
+        AND datereservation >= CURRENT_DATE
+        AND datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
+      GROUP BY datereservation
+    `;
+
+    if (top) {
+      sql += ` ORDER BY taux_occupation_prevu DESC, heures_reservees DESC LIMIT $1`;
+    } else {
+      sql += ` ORDER BY datereservation ASC`;
+    }
+
+    const result = await db.query(sql, top ? [parseInt(top)] : []);
+
+    const stats = {
+      moyenne_occupation: 0,
+      jour_plus_charge: null,
+      revenu_total_attendu: 0,
+      reservations_total: 0
+    };
+
+    if (result.rows.length > 0) {
+      stats.moyenne_occupation = Math.round(
+        result.rows.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / result.rows.length
+      );
+      
+      stats.jour_plus_charge = result.rows.reduce(
+        (max, row) => parseFloat(row.taux_occupation_prevu) > parseFloat(max.taux_occupation_prevu) ? row : max,
+        result.rows[0]
+      );
+      
+      stats.revenu_total_attendu = result.rows.reduce((sum, row) => sum + parseFloat(row.revenu_attendu), 0);
+      stats.reservations_total = result.rows.reduce((sum, row) => sum + parseInt(row.nb_reservations), 0);
+    }
+
+    res.json({
+      success: true,
+      data: result.rows,
+      periode: joursNumber,
+      statistiques: stats,
+      date_debut: new Date().toISOString().split('T')[0],
+      date_fin: new Date(Date.now() + joursNumber * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur récupération prévisions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour les prévisions détaillées avec tendances
+router.get('/previsions/detaillees', async (req, res) => {
+  try {
+    const { jours = 14 } = req.query;
+    const joursNumber = parseInt(jours);
+
+    const sql = `
+      WITH reservations_jour AS (
+        SELECT 
+          datereservation,
+          COUNT(DISTINCT numeroterrain) AS nb_terrains_utilises,
+          COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) AS heures_reservees,
+          COALESCE(COUNT(DISTINCT numeroterrain) * 12, 0) AS heures_disponibles,
+          ROUND(
+            (COALESCE(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0)
+             /
+             NULLIF(COUNT(DISTINCT numeroterrain) * 12, 0)
+            ) * 100, 2
+          ) AS taux_occupation_prevu,
+          COALESCE(SUM(tarif), 0) AS revenu_attendu,
+          COUNT(*) AS nb_reservations,
+          STRING_AGG(DISTINCT typeterrain, ', ') AS terrains_types
+        FROM reservation
+        WHERE statut = 'confirmée'
+          AND datereservation >= CURRENT_DATE
+          AND datereservation <= CURRENT_DATE + INTERVAL '${joursNumber} days'
+        GROUP BY datereservation
+      ),
+      tendances AS (
+        SELECT 
+          datereservation,
+          taux_occupation_prevu,
+          LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) AS occupation_precedente,
+          CASE 
+            WHEN LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) IS NULL THEN 'stable'
+            WHEN taux_occupation_prevu > LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) THEN 'up'
+            WHEN taux_occupation_prevu < LAG(taux_occupation_prevu) OVER (ORDER BY datereservation) THEN 'down'
+            ELSE 'stable'
+          END AS tendance
+        FROM reservations_jour
+      )
+      SELECT 
+        rj.*,
+        t.tendance,
+        TO_CHAR(rj.datereservation, 'DD Mon') AS date_formattee,
+        EXTRACT(DOW FROM rj.datereservation) AS jour_semaine,
+        CASE 
+          WHEN rj.taux_occupation_prevu >= 80 THEN 'Élevée'
+          WHEN rj.taux_occupation_prevu >= 50 THEN 'Moyenne'
+          ELSE 'Faible'
+        END AS niveau_occupation
+      FROM reservations_jour rj
+      LEFT JOIN tendances t ON rj.datereservation = t.datereservation
+      ORDER BY rj.datereservation ASC
+    `;
+
+    const result = await db.query(sql);
+
+    const today = new Date();
+    const dateFin = new Date(today);
+    dateFin.setDate(today.getDate() + joursNumber);
+    
+    const toutesLesDates = [];
+    const dateCourante = new Date(today);
+    
+    while (dateCourante <= dateFin) {
+      const dateStr = dateCourante.toISOString().split('T')[0];
+      const dateFormatee = dateCourante.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+      const jourSemaine = dateCourante.getDay();
+      
+      const reservationExistante = result.rows.find(row => 
+        row.datereservation.toISOString().split('T')[0] === dateStr
+      );
+      
+      if (reservationExistante) {
+        toutesLesDates.push(reservationExistante);
+      } else {
+        toutesLesDates.push({
+          datereservation: dateStr,
+          taux_occupation_prevu: 0,
+          heures_reservees: 0,
+          revenu_attendu: 0,
+          nb_reservations: 0,
+          tendance: 'stable',
+          date_formattee: dateFormatee,
+          jour_semaine: jourSemaine,
+          niveau_occupation: 'Faible',
+          nb_terrains_utilises: 0,
+          heures_disponibles: 12,
+          terrains_types: 'Aucun'
+        });
+      }
+      
+      dateCourante.setDate(dateCourante.getDate() + 1);
+    }
+
+    const stats = {
+      moyenne_occupation: Math.round(
+        toutesLesDates.reduce((sum, row) => sum + parseFloat(row.taux_occupation_prevu), 0) / toutesLesDates.length
+      ),
+      jour_plus_charge: toutesLesDates.reduce(
+        (max, row) => parseFloat(row.taux_occupation_prevu) > parseFloat(max.taux_occupation_prevu) ? row : max,
+        toutesLesDates[0]
+      ),
+      jour_moins_charge: toutesLesDates.reduce(
+        (min, row) => parseFloat(row.taux_occupation_prevu) < parseFloat(min.taux_occupation_prevu) ? row : min,
+        toutesLesDates[0]
+      ),
+      revenu_total_attendu: toutesLesDates.reduce((sum, row) => sum + parseFloat(row.revenu_attendu), 0),
+      reservations_total: toutesLesDates.reduce((sum, row) => sum + parseInt(row.nb_reservations), 0),
+      jours_eleves: toutesLesDates.filter(row => parseFloat(row.taux_occupation_prevu) >= 80).length,
+      jours_moyens: toutesLesDates.filter(row => parseFloat(row.taux_occupation_prevu) >= 50 && parseFloat(row.taux_occupation_prevu) < 80).length,
+      jours_faibles: toutesLesDates.filter(row => parseFloat(row.taux_occupation_prevu) < 50).length
+    };
+
+    res.json({
+      success: true,
+      data: toutesLesDates,
+      periode: joursNumber,
+      statistiques: stats,
+      metriques: {
+        jours_analyse: toutesLesDates.length,
+        date_debut: today.toISOString().split('T')[0],
+        date_fin: dateFin.toISOString().split('T')[0],
+        terrains_moyen: Math.round(toutesLesDates.reduce((sum, row) => sum + parseInt(row.nb_terrains_utilises), 0) / toutesLesDates.length)
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur prévisions détaillées:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📧 GESTION DES EMAILS - VERSION AMÉLIORÉE
 
 // 📌 Route pour vérifier la configuration email
 router.get('/email/config', async (req, res) => {
   try {
     const config = await checkEmailConfiguration();
+    
     res.json({
       success: true,
       configuration: config,
@@ -417,16 +704,18 @@ router.get('/email/config', async (req, res) => {
   }
 });
 
-// 📌 Route pour tester l'envoi d'email
+// 📌 Route pour tester l'envoi d'email - VERSION SIMPLIFIÉE
 router.post('/email/test', async (req, res) => {
   try {
     const { email } = req.body;
+
     if (!email) {
       return res.status(400).json({
         success: false,
         message: 'Email de test requis'
       });
     }
+
     if (!email.includes('@')) {
       return res.status(400).json({
         success: false,
@@ -440,6 +729,7 @@ router.post('/email/test', async (req, res) => {
       heurereservation: '14:00',
       heurefin: '16:00',
       statut: 'confirmée',
+      idclient: 1,
       numeroterrain: 1,
       nomclient: 'Test',
       prenom: 'Utilisateur',
@@ -452,6 +742,7 @@ router.post('/email/test', async (req, res) => {
 
     console.log('🧪 TEST EMAIL MANUEL vers:', email);
     const result = await sendReservationConfirmation(testReservation);
+    
     if (result.success) {
       res.json({
         success: true,
@@ -469,6 +760,7 @@ router.post('/email/test', async (req, res) => {
         email: email
       });
     }
+
   } catch (error) {
     console.error('❌ Erreur test email manuel:', error);
     res.status(500).json({
@@ -479,18 +771,20 @@ router.post('/email/test', async (req, res) => {
   }
 });
 
-// 🎯 GESTION DES RÉSERVATIONS
+// 🎯 GESTION DES RÉSERVATIONS - AVEC GESTION EMAIL AMÉLIORÉE
 
 // 📌 Route pour récupérer les réservations (avec ou sans filtres)
 router.get('/', async (req, res) => {
   try {
-    const { nom, email, statut, date, page = 1, limit = 10 } = req.query;
+    const { nom, email, statut, date, clientId, page = 1, limit = 10 } = req.query;
+
     let sql = `
       SELECT 
         numeroreservations as id,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
+        idclient,
         numeroterrain,
         nomclient,
         prenom,
@@ -504,24 +798,34 @@ router.get('/', async (req, res) => {
       FROM reservation 
       WHERE 1=1
     `;
+
     const params = [];
     let paramCount = 0;
 
-    if (nom) {
+    if (clientId) {
       paramCount++;
-      sql += ` AND nomclient ILIKE $${paramCount}`;
-      params.push(`%${nom}%`);
+      sql += ` AND idclient = $${paramCount}`;
+      params.push(clientId);
+    } else {
+      if (nom) {
+        paramCount++;
+        sql += ` AND nomclient ILIKE $${paramCount}`;
+        params.push(`%${nom}%`);
+      }
+
+      if (email) {
+        paramCount++;
+        sql += ` AND email ILIKE $${paramCount}`;
+        params.push(`%${email}%`);
+      }
     }
-    if (email) {
-      paramCount++;
-      sql += ` AND email ILIKE $${paramCount}`;
-      params.push(`%${email}%`);
-    }
+
     if (statut) {
       paramCount++;
       sql += ` AND statut = $${paramCount}`;
       params.push(statut);
     }
+
     if (date) {
       paramCount++;
       sql += ` AND datereservation = $${paramCount}`;
@@ -539,6 +843,7 @@ router.get('/', async (req, res) => {
     params.push(parseInt(limit), offset);
 
     const result = await db.query(sql, params);
+
     res.json({
       success: true,
       count: result.rows.length,
@@ -547,6 +852,7 @@ router.get('/', async (req, res) => {
       totalPages: Math.ceil(totalCount / limit),
       data: result.rows
     });
+
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
     res.status(500).json({
@@ -561,12 +867,14 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
     const sql = `
       SELECT 
         numeroreservations as id,
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
+        idclient,
         numeroterrain,
         nomclient,
         prenom,
@@ -580,17 +888,21 @@ router.get('/:id', async (req, res) => {
       FROM reservation 
       WHERE numeroreservations = $1
     `;
+
     const result = await db.query(sql, [id]);
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     res.json({
       success: true,
       data: result.rows[0]
     });
+
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
     res.status(500).json({
@@ -601,13 +913,14 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour créer une nouvelle réservation
+// 📌 Route pour créer une nouvelle réservation - AVEC GESTION EMAIL AMÉLIORÉE
 router.post('/', async (req, res) => {
   try {
     const {
       datereservation,
       heurereservation,
       statut,
+      idclient,
       numeroterrain,
       nomclient,
       prenom,
@@ -621,43 +934,55 @@ router.post('/', async (req, res) => {
     } = req.body;
 
     // Validation des champs requis
-    if (!datereservation || !heurereservation || !statut || !numeroterrain) {
+    if (!datereservation || !heurereservation || !statut || !idclient || !numeroterrain) {
       return res.status(400).json({
         success: false,
-        message: 'Champs requis manquants: date, heure, statut et numeroterrain sont obligatoires.'
+        message: 'Champs requis manquants: date, heure, statut, idclient et numeroterrain sont obligatoires.'
       });
     }
 
     const sql = `
       INSERT INTO reservation (
-        datereservation, heurereservation, statut, numeroterrain,
+        datereservation, heurereservation, statut, idclient, numeroterrain,
         nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING numeroreservations as id, *
     `;
+
     const params = [
-      datereservation, heurereservation, statut, numeroterrain,
+      datereservation, heurereservation, statut, idclient, numeroterrain,
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
     ];
 
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
 
-    // Gestion de l'envoi d'email
+    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL
     let emailResult = null;
+    
+    // Conditions pour l'envoi d'email
     const shouldSendEmail = statut === 'confirmée' && email && email.includes('@');
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Tentative d'envoi d'email de confirmation à: ${email}`);
+        console.log(`🏟️ Réservation pour: ${nomterrain || 'Terrain ' + numeroterrain}`);
+        
         emailResult = await sendReservationConfirmation(newReservation);
+        
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
         } else {
           console.error('❌ Erreur lors de l\'envoi de l\'email:', emailResult.error);
+          // On ne bloque pas la réponse à cause de l'email
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { success: false, error: emailError.message };
+        emailResult = { 
+          success: false, 
+          error: emailError.message,
+          sent: false
+        };
       }
     } else {
       console.log('ℹ️  Aucun email envoyé - Raisons:',
@@ -665,15 +990,21 @@ router.post('/', async (req, res) => {
         !email ? 'Email manquant' : '',
         !email.includes('@') ? 'Email invalide' : ''
       );
-      emailResult = { sent: false, reason: 'Non requis' };
+      emailResult = { 
+        sent: false, 
+        reason: 'Non requis (statut non confirmé ou email manquant/invalide)' 
+      };
     }
 
+    // Réponse réussie même si l'email échoue
     res.status(201).json({
       success: true,
-      message: 'Réservation créée avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Réservation créée avec succès' + 
+               (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: newReservation,
       email: emailResult
     });
+
   } catch (error) {
     console.error('❌ Erreur création réservation:', error);
     res.status(500).json({
@@ -684,7 +1015,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour une réservation
+// 📌 Route pour mettre à jour une réservation - AVEC GESTION EMAIL AMÉLIORÉE
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -692,6 +1023,7 @@ router.put('/:id', async (req, res) => {
       datereservation,
       heurereservation,
       statut,
+      idclient,
       numeroterrain,
       nomclient,
       prenom,
@@ -704,18 +1036,22 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
+    // Récupérer l'ancienne réservation pour vérifier le changement de statut
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
       [id]
     );
+
     if (oldReservationResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     const oldReservation = oldReservationResult.rows[0];
     const oldStatus = oldReservation.statut;
+    const oldEmail = oldReservation.email;
 
     const sql = `
       UPDATE reservation 
@@ -723,35 +1059,43 @@ router.put('/:id', async (req, res) => {
         datereservation = $1,
         heurereservation = $2,
         statut = $3,
-        numeroterrain = $4,
-        nomclient = $5,
-        prenom = $6,
-        email = $7,
-        telephone = $8,
-        typeterrain = $9,
-        tarif = $10,
-        surface = $11,
-        heurefin = $12,
-        nomterrain = $13
-      WHERE numeroreservations = $14
+        idclient = $4,
+        numeroterrain = $5,
+        nomclient = $6,
+        prenom = $7,
+        email = $8,
+        telephone = $9,
+        typeterrain = $10,
+        tarif = $11,
+        surface = $12,
+        heurefin = $13,
+        nomterrain = $14
+      WHERE numeroreservations = $15
       RETURNING numeroreservations as id, *
     `;
+
     const params = [
-      datereservation, heurereservation, statut, numeroterrain,
+      datereservation, heurereservation, statut, idclient, numeroterrain,
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain, id
     ];
 
     const result = await db.query(sql, params);
     const updatedReservation = result.rows[0];
 
+    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL POUR MISES À JOUR
     let emailResult = null;
+    
+    // Conditions pour l'envoi d'email lors de la mise à jour
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = email && email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation (mise à jour) à: ${email}`);
+        
         emailResult = await sendReservationConfirmation(updatedReservation);
+        
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
         } else {
@@ -759,19 +1103,30 @@ router.put('/:id', async (req, res) => {
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { success: false, error: emailError.message };
+        emailResult = { 
+          success: false, 
+          error: emailError.message 
+        };
       }
     } else {
-      console.log('ℹ️  Aucun email envoyé pour mise à jour');
-      emailResult = { sent: false, reason: 'Non requis' };
+      console.log('ℹ️  Aucun email envoyé pour mise à jour - Raisons:',
+        !becameConfirmed ? 'Statut non changé vers confirmée' : '',
+        !hasValidEmail ? 'Email manquant ou invalide' : ''
+      );
+      emailResult = { 
+        sent: false, 
+        reason: becameConfirmed ? 'Email invalide' : 'Statut inchangé' 
+      };
     }
 
     res.json({
       success: true,
-      message: 'Réservation mise à jour avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Réservation mise à jour avec succès' + 
+               (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: updatedReservation,
       email: emailResult
     });
+
   } catch (error) {
     console.error('❌ Erreur mise à jour réservation:', error);
     res.status(500).json({
@@ -786,19 +1141,24 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+
     const sql = 'DELETE FROM reservation WHERE numeroreservations = $1 RETURNING numeroreservations as id, *';
+
     const result = await db.query(sql, [id]);
+
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     res.json({
       success: true,
       message: 'Réservation supprimée avec succès.',
       data: result.rows[0]
     });
+
   } catch (error) {
     console.error('❌ Erreur suppression réservation:', error);
     res.status(500).json({
@@ -809,11 +1169,12 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour le statut d'une réservation
+// 📌 Route pour mettre à jour le statut d'une réservation - AVEC GESTION EMAIL AMÉLIORÉE
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
     const { statut } = req.body;
+
     if (!statut || !['confirmée', 'annulée', 'en attente', 'terminée'].includes(statut)) {
       return res.status(400).json({
         success: false,
@@ -821,16 +1182,19 @@ router.put('/:id/statut', async (req, res) => {
       });
     }
 
+    // Récupérer l'ancienne réservation pour vérifier le changement de statut
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
       [id]
     );
+
     if (oldReservationResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'Réservation non trouvée.'
       });
     }
+
     const oldReservation = oldReservationResult.rows[0];
     const oldStatus = oldReservation.statut;
 
@@ -840,17 +1204,24 @@ router.put('/:id/statut', async (req, res) => {
       WHERE numeroreservations = $2
       RETURNING numeroreservations as id, *
     `;
+
     const result = await db.query(sql, [statut, id]);
     const reservation = result.rows[0];
 
+    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL POUR CHANGEMENT DE STATUT
     let emailResult = null;
+    
+    // Conditions pour l'envoi d'email lors du changement de statut
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = reservation.email && reservation.email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
+    
     if (shouldSendEmail) {
       try {
         console.log(`📧 Envoi d'email de confirmation (changement statut) à: ${reservation.email}`);
+        
         emailResult = await sendReservationConfirmation(reservation);
+        
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
         } else {
@@ -858,19 +1229,30 @@ router.put('/:id/statut', async (req, res) => {
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { success: false, error: emailError.message };
+        emailResult = { 
+          success: false, 
+          error: emailError.message 
+        };
       }
     } else {
-      console.log('ℹ️  Aucun email envoyé pour changement statut');
-      emailResult = { sent: false, reason: 'Non requis' };
+      console.log('ℹ️  Aucun email envoyé pour changement statut - Raisons:',
+        !becameConfirmed ? 'Statut non changé vers confirmée' : '',
+        !hasValidEmail ? 'Email manquant ou invalide' : ''
+      );
+      emailResult = { 
+        sent: false, 
+        reason: becameConfirmed ? 'Email invalide' : 'Statut inchangé' 
+      };
     }
 
     res.json({
       success: true,
-      message: 'Statut mis à jour avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Statut de la réservation mis à jour avec succès' + 
+               (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: reservation,
       email: emailResult
     });
+
   } catch (error) {
     console.error('❌ Erreur serveur:', error);
     res.status(500).json({
@@ -899,67 +1281,17 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
       GROUP BY numeroterrain, nomterrain
       ORDER BY numeroterrain
     `;
+
     const result = await db.query(sql);
+
     res.json({
       success: true,
       date: new Date().toISOString().split('T')[0],
       data: result.rows
     });
+
   } catch (error) {
     console.error('❌ Erreur réservations aujourd\'hui:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message
-    });
-  }
-});
-
-// 📌 NOUVELLE ROUTE: Statistiques détaillées d'occupation
-router.get('/stats/occupation', async (req, res) => {
-  try {
-    const { date_debut, date_fin } = req.query;
-    
-    const startDate = date_debut || new Date().toISOString().split('T')[0];
-    const endDate = date_fin || new Date().toISOString().split('T')[0];
-
-    const sql = `
-      WITH stats_detaillees AS (
-        SELECT 
-          numeroterrain,
-          nomterrain,
-          COUNT(*) as nb_reservations,
-          COALESCE(SUM(
-            EXTRACT(EPOCH FROM (
-              MAKE_TIME(SPLIT_PART(heurefin, ':', 1)::int, SPLIT_PART(heurefin, ':', 2)::int, 0) -
-              MAKE_TIME(SPLIT_PART(heurereservation, ':', 1)::int, SPLIT_PART(heurereservation, ':', 2)::int, 0)
-            )/3600
-          ), 0) as heures_reservees,
-          COALESCE(SUM(tarif), 0) as revenus
-        FROM reservation 
-        WHERE statut = 'confirmée'
-          AND datereservation >= $1 AND datereservation <= $2
-        GROUP BY numeroterrain, nomterrain
-      )
-      SELECT 
-        *,
-        ROUND(
-          (heures_reservees / (12 * (DATE_PART('days', $2::date - $1::date) + 1))) * 100, 
-          1
-        ) as taux_occupation_terrain
-      FROM stats_detaillees
-      ORDER BY taux_occupation_terrain DESC
-    `;
-
-    const result = await db.query(sql, [startDate, endDate]);
-    
-    res.json({
-      success: true,
-      periode: { date_debut: startDate, date_fin: endDate },
-      data: result.rows
-    });
-  } catch (error) {
-    console.error('❌ Erreur stats occupation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
