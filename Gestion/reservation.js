@@ -37,8 +37,8 @@ router.get('/revenus-totaux', async (req, res) => {
         COUNT(DISTINCT datereservation) AS nb_jours_avec_reservations,
         ROUND(AVG(tarif), 2) AS revenu_moyen_par_reservation,
         MAX(tarif) AS revenu_max,
-        MIN(tarif) AS revenu_min,
-        COUNT(DISTINCT idclient) AS nb_clients_uniques
+        MIN(tarif) AS revenu_min
+        -- ❌ Supprimé: COUNT(DISTINCT idclient) AS nb_clients_uniques
       FROM reservation 
       WHERE statut = 'confirmée'
       ${periodeCondition}
@@ -272,7 +272,6 @@ router.get('/taux-remplissage', async (req, res) => {
                 ) * 100
               ), 2) AS taux_remplissage_moyen,
               COUNT(DISTINCT datereservation) AS jours_occupes,
-              SUM(COUNT(DISTINCT numeroterrain)) OVER () AS total_terrains_semaine,
               AVG(COUNT(DISTINCT numeroterrain)) AS terrains_moyen_par_jour
             FROM reservation
             WHERE statut = 'confirmée'
@@ -684,6 +683,7 @@ router.post('/email/test', async (req, res) => {
       heurereservation: '14:00',
       heurefin: '16:00',
       statut: 'confirmée',
+      // ❌ Supprimé: idclient
       numeroterrain: 1,
       nomclient: 'Test',
       prenom: 'Utilisateur',
@@ -728,7 +728,7 @@ router.post('/email/test', async (req, res) => {
 // 📌 Route pour récupérer les réservations (avec ou sans filtres)
 router.get('/', async (req, res) => {
   try {
-    const { nom, email, statut, date, page = 1, limit = 10 } = req.query;
+    const { nom, email, statut, date, page = 1, limit = 10 } = req.query; // ❌ Supprimé: clientId
     let sql = `
       SELECT 
         numeroreservations as id,
@@ -751,6 +751,7 @@ router.get('/', async (req, res) => {
     const params = [];
     let paramCount = 0;
 
+    // ❌ Supprimé le bloc `if (clientId)`
     if (nom) {
       paramCount++;
       sql += ` AND nomclient ILIKE $${paramCount}`;
@@ -845,7 +846,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour créer une nouvelle réservation - AVEC GESTION EMAIL AMÉLIORÉE
+// 📌 Route pour créer une nouvelle réservation
 router.post('/', async (req, res) => {
   try {
     const {
@@ -864,7 +865,7 @@ router.post('/', async (req, res) => {
       nomterrain
     } = req.body;
 
-    // Validation des champs requis
+    // Validation des champs requis — ❌ idclient supprimé
     if (!datereservation || !heurereservation || !statut || !numeroterrain) {
       return res.status(400).json({
         success: false,
@@ -889,7 +890,6 @@ router.post('/', async (req, res) => {
 
     // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL
     let emailResult = null;
-    // Conditions pour l'envoi d'email
     const shouldSendEmail = statut === 'confirmée' && email && email.includes('@');
     if (shouldSendEmail) {
       try {
@@ -900,15 +900,10 @@ router.post('/', async (req, res) => {
           console.log('✅ Email envoyé avec succès!');
         } else {
           console.error('❌ Erreur lors de l\'envoi de l\'email:', emailResult.error);
-          // On ne bloque pas la réponse à cause de l'email
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { 
-          success: false, 
-          error: emailError.message,
-          sent: false
-        };
+        emailResult = { success: false, error: emailError.message };
       }
     } else {
       console.log('ℹ️  Aucun email envoyé - Raisons:',
@@ -916,17 +911,12 @@ router.post('/', async (req, res) => {
         !email ? 'Email manquant' : '',
         !email.includes('@') ? 'Email invalide' : ''
       );
-      emailResult = { 
-        sent: false, 
-        reason: 'Non requis (statut non confirmé ou email manquant/invalide)' 
-      };
+      emailResult = { sent: false, reason: 'Non requis' };
     }
 
-    // Réponse réussie même si l'email échoue
     res.status(201).json({
       success: true,
-      message: 'Réservation créée avec succès' + 
-               (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Réservation créée avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: newReservation,
       email: emailResult
     });
@@ -940,7 +930,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour une réservation - AVEC GESTION EMAIL AMÉLIORÉE
+// 📌 Route pour mettre à jour une réservation
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -960,7 +950,6 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
-    // Récupérer l'ancienne réservation pour vérifier le changement de statut
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
       [id]
@@ -973,7 +962,6 @@ router.put('/:id', async (req, res) => {
     }
     const oldReservation = oldReservationResult.rows[0];
     const oldStatus = oldReservation.statut;
-    const oldEmail = oldReservation.email;
 
     const sql = `
       UPDATE reservation 
@@ -1002,9 +990,7 @@ router.put('/:id', async (req, res) => {
     const result = await db.query(sql, params);
     const updatedReservation = result.rows[0];
 
-    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL POUR MISES À JOUR
     let emailResult = null;
-    // Conditions pour l'envoi d'email lors de la mise à jour
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = email && email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
@@ -1019,26 +1005,16 @@ router.put('/:id', async (req, res) => {
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { 
-          success: false, 
-          error: emailError.message 
-        };
+        emailResult = { success: false, error: emailError.message };
       }
     } else {
-      console.log('ℹ️  Aucun email envoyé pour mise à jour - Raisons:',
-        !becameConfirmed ? 'Statut non changé vers confirmée' : '',
-        !hasValidEmail ? 'Email manquant ou invalide' : ''
-      );
-      emailResult = { 
-        sent: false, 
-        reason: becameConfirmed ? 'Email invalide' : 'Statut inchangé' 
-      };
+      console.log('ℹ️  Aucun email envoyé pour mise à jour');
+      emailResult = { sent: false, reason: 'Non requis' };
     }
 
     res.json({
       success: true,
-      message: 'Réservation mise à jour avec succès' + 
-               (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Réservation mise à jour avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: updatedReservation,
       email: emailResult
     });
@@ -1079,7 +1055,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// 📌 Route pour mettre à jour le statut d'une réservation - AVEC GESTION EMAIL AMÉLIORÉE
+// 📌 Route pour mettre à jour le statut d'une réservation
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1091,7 +1067,6 @@ router.put('/:id/statut', async (req, res) => {
       });
     }
 
-    // Récupérer l'ancienne réservation pour vérifier le changement de statut
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
       [id]
@@ -1114,9 +1089,7 @@ router.put('/:id/statut', async (req, res) => {
     const result = await db.query(sql, [statut, id]);
     const reservation = result.rows[0];
 
-    // ✅ GESTION AMÉLIORÉE DE L'ENVOI D'EMAIL POUR CHANGEMENT DE STATUT
     let emailResult = null;
-    // Conditions pour l'envoi d'email lors du changement de statut
     const becameConfirmed = oldStatus !== 'confirmée' && statut === 'confirmée';
     const hasValidEmail = reservation.email && reservation.email.includes('@');
     const shouldSendEmail = becameConfirmed && hasValidEmail;
@@ -1131,26 +1104,16 @@ router.put('/:id/statut', async (req, res) => {
         }
       } catch (emailError) {
         console.error('❌ Erreur critique lors de l\'envoi d\'email:', emailError);
-        emailResult = { 
-          success: false, 
-          error: emailError.message 
-        };
+        emailResult = { success: false, error: emailError.message };
       }
     } else {
-      console.log('ℹ️  Aucun email envoyé pour changement statut - Raisons:',
-        !becameConfirmed ? 'Statut non changé vers confirmée' : '',
-        !hasValidEmail ? 'Email manquant ou invalide' : ''
-      );
-      emailResult = { 
-        sent: false, 
-        reason: becameConfirmed ? 'Email invalide' : 'Statut inchangé' 
-      };
+      console.log('ℹ️  Aucun email envoyé pour changement statut');
+      emailResult = { sent: false, reason: 'Non requis' };
     }
 
     res.json({
       success: true,
-      message: 'Statut de la réservation mis à jour avec succès' + 
-               (emailResult.success ? ' et email de confirmation envoyé' : ''),
+      message: 'Statut mis à jour avec succès' + (emailResult.success ? ' et email de confirmation envoyé' : ''),
       data: reservation,
       email: emailResult
     });
