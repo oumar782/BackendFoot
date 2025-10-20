@@ -3,31 +3,78 @@ import db from '../db.js';
 import { sendReservationConfirmation, checkEmailConfiguration } from '../services/emailService.js';
 const router = express.Router();
 
-// 📊 DASHBOARD PERFORMANT - NOUVELLE ROUTE
-// 📊 DASHBOARD CORRIGÉ - COMPATIBLE AVEC TOUTES LES VERSIONS POSTGRESQL
 router.get('/dashboard', async (req, res) => {
   try {
     const { periode = 'mois' } = req.query;
 
-    // 1. Statistiques principales - VERSION CORRIGÉE
+    // Fonction pour obtenir les dates selon la période
+    const getDateRange = (period) => {
+      const now = new Date();
+      switch (period) {
+        case 'jour':
+          return {
+            start: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+            end: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1),
+            previousStart: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1),
+            previousEnd: new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          };
+        case 'semaine':
+          const startOfWeek = new Date(now);
+          startOfWeek.setDate(now.getDate() - now.getDay() + 1); // Lundi
+          return {
+            start: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate()),
+            end: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() + 7),
+            previousStart: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() - 7),
+            previousEnd: new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate())
+          };
+        case 'annee':
+          return {
+            start: new Date(now.getFullYear(), 0, 1),
+            end: new Date(now.getFullYear() + 1, 0, 1),
+            previousStart: new Date(now.getFullYear() - 1, 0, 1),
+            previousEnd: new Date(now.getFullYear(), 0, 1)
+          };
+        case 'mois':
+        default:
+          return {
+            start: new Date(now.getFullYear(), now.getMonth(), 1),
+            end: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+            previousStart: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+            previousEnd: new Date(now.getFullYear(), now.getMonth(), 1)
+          };
+      }
+    };
+
+    const currentRange = getDateRange(periode);
+    const previousRange = getDateRange(periode === 'mois' ? 'mois' : 
+                                    periode === 'semaine' ? 'semaine' : 
+                                    periode === 'annee' ? 'annee' : 'jour');
+
+    // 1. Statistiques principales - AVEC PÉRIODE DYNAMIQUE
     const statsPrincipalesSql = `
       SELECT 
-        -- Revenus
-        COALESCE(SUM(CASE WHEN datereservation >= date_trunc('month', CURRENT_DATE) 
-          AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_mois,
+        -- Revenus période actuelle
+        COALESCE(SUM(CASE WHEN datereservation >= $1 AND datereservation < $2 
+          AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_periode,
+        
+        -- Revenus année en cours (toujours utile)
         COALESCE(SUM(CASE WHEN datereservation >= date_trunc('year', CURRENT_DATE) 
           AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_annee,
+        
+        -- Revenus aujourd'hui
         COALESCE(SUM(CASE WHEN datereservation = CURRENT_DATE 
           AND statut = 'confirmée' THEN tarif ELSE 0 END), 0) AS revenus_aujourdhui,
         
-        -- Réservations
-        COUNT(CASE WHEN datereservation >= date_trunc('month', CURRENT_DATE) 
-          AND statut = 'confirmée' THEN 1 END) AS reservations_mois,
+        -- Réservations période actuelle
+        COUNT(CASE WHEN datereservation >= $1 AND datereservation < $2 
+          AND statut = 'confirmée' THEN 1 END) AS reservations_periode,
+        
+        -- Réservations aujourd'hui
         COUNT(CASE WHEN datereservation = CURRENT_DATE 
           AND statut = 'confirmée' THEN 1 END) AS confirmes_aujourdhui,
         COUNT(CASE WHEN datereservation = CURRENT_DATE THEN 1 END) AS reservations_aujourdhui,
         
-        -- Clients
+        -- Clients actifs (30 derniers jours)
         COUNT(DISTINCT CASE WHEN datereservation >= CURRENT_DATE - INTERVAL '30 days' 
           AND statut = 'confirmée' THEN email END) AS clients_actifs,
         
@@ -37,8 +84,9 @@ router.get('/dashboard', async (req, res) => {
       WHERE statut = 'confirmée'
     `;
 
-    // 2. Taux de remplissage - VERSION CORRIGÉE
-    const remplissageSql = `
+    // 2. Taux de remplissage - ADAPTÉ À LA PÉRIODE
+    const remplissageSql = periode === 'jour' ? `
+      -- Taux de remplissage pour aujourd'hui
       WITH stats_terrains AS (
         SELECT 
           COUNT(DISTINCT numeroterrain) as nb_terrains_utilises,
@@ -58,23 +106,33 @@ router.get('/dashboard', async (req, res) => {
         nb_terrains_utilises,
         heures_reservees
       FROM stats_terrains
+    ` : `
+      -- Taux de remplissage moyen pour les autres périodes
+      SELECT 
+        CAST(
+          (COUNT(*) * 100.0 / (SELECT COUNT(DISTINCT numeroterrain) FROM reservation WHERE statut = 'confirmée'))
+        AS NUMERIC(10,1)) AS taux_remplissage,
+        COUNT(DISTINCT numeroterrain) as nb_terrains_utilises,
+        COUNT(*) as heures_reservees
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation >= $1 AND datereservation < $2
     `;
 
-    // 3. Tendances - VERSION CORRIGÉE
+    // 3. Tendances - COMPARAISON AVEC PÉRIODE PRÉCÉDENTE
     const tendancesSql = `
       -- Revenus
       WITH revenus_actuels AS (
         SELECT COALESCE(SUM(tarif), 0) AS total
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation >= date_trunc('month', CURRENT_DATE)
+          AND datereservation >= $1 AND datereservation < $2
       ),
       revenus_precedents AS (
         SELECT COALESCE(SUM(tarif), 0) AS total
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
-          AND datereservation < date_trunc('month', CURRENT_DATE)
+          AND datereservation >= $3 AND datereservation < $4
       ),
       
       -- Réservations
@@ -82,14 +140,13 @@ router.get('/dashboard', async (req, res) => {
         SELECT COUNT(*) AS total
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation >= date_trunc('month', CURRENT_DATE)
+          AND datereservation >= $1 AND datereservation < $2
       ),
       reservations_precedentes AS (
         SELECT COUNT(*) AS total
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
-          AND datereservation < date_trunc('month', CURRENT_DATE)
+          AND datereservation >= $3 AND datereservation < $4
       ),
       
       -- Clients
@@ -97,14 +154,13 @@ router.get('/dashboard', async (req, res) => {
         SELECT COUNT(DISTINCT email) AS total
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
+          AND datereservation >= $1 AND datereservation < $2
       ),
       clients_precedents AS (
         SELECT COUNT(DISTINCT email) AS total
         FROM reservation
         WHERE statut = 'confirmée'
-          AND datereservation >= CURRENT_DATE - INTERVAL '60 days'
-          AND datereservation < CURRENT_DATE - INTERVAL '30 days'
+          AND datereservation >= $3 AND datereservation < $4
       )
       
       SELECT 
@@ -142,7 +198,7 @@ router.get('/dashboard', async (req, res) => {
         END AS trend_clients
     `;
 
-    // 4. Réservations à venir
+    // 4. Réservations à venir (toujours utile)
     const reservationsProchainesSql = `
       SELECT 
         datereservation,
@@ -172,7 +228,7 @@ router.get('/dashboard', async (req, res) => {
       LIMIT 5
     `;
 
-    // Exécution parallèle
+    // Exécution des requêtes avec les paramètres de période
     const [
       statsPrincipalesResult,
       remplissageResult,
@@ -180,21 +236,35 @@ router.get('/dashboard', async (req, res) => {
       reservationsProchainesResult,
       topClientsResult
     ] = await Promise.all([
-      db.query(statsPrincipalesSql),
-      db.query(remplissageSql),
-      db.query(tendancesSql),
+      // Stats principales
+      db.query(statsPrincipalesSql, [currentRange.start, currentRange.end]),
+      
+      // Remplissage (paramètres différents selon la période)
+      periode === 'jour' 
+        ? db.query(remplissageSql)
+        : db.query(remplissageSql, [currentRange.start, currentRange.end]),
+      
+      // Tendances (comparaison avec période précédente)
+      db.query(tendancesSql, [
+        currentRange.start, currentRange.end,
+        previousRange.start, previousRange.end
+      ]),
+      
+      // Réservations à venir
       db.query(reservationsProchainesSql),
+      
+      // Top clients
       db.query(topClientsSql)
     ]);
 
-    // Préparation des données
+    // Préparation des données finales
     const data = {
       // Statistiques principales
-      revenus_mois: parseFloat(statsPrincipalesResult.rows[0].revenus_mois) || 0,
+      revenus_mois: parseFloat(statsPrincipalesResult.rows[0].revenus_periode) || 0,
       revenus_annee: parseFloat(statsPrincipalesResult.rows[0].revenus_annee) || 0,
       revenus_aujourdhui: parseFloat(statsPrincipalesResult.rows[0].revenus_aujourdhui) || 0,
       
-      reservations_mois: parseInt(statsPrincipalesResult.rows[0].reservations_mois) || 0,
+      reservations_mois: parseInt(statsPrincipalesResult.rows[0].reservations_periode) || 0,
       confirmes_aujourdhui: parseInt(statsPrincipalesResult.rows[0].confirmes_aujourdhui) || 0,
       reservations_aujourdhui: parseInt(statsPrincipalesResult.rows[0].reservations_aujourdhui) || 0,
       clients_actifs: parseInt(statsPrincipalesResult.rows[0].clients_actifs) || 0,
@@ -227,8 +297,8 @@ router.get('/dashboard', async (req, res) => {
       
       // Métriques calculées
       metriques: {
-        revenu_moyen_par_reservation: statsPrincipalesResult.rows[0].reservations_mois > 0 
-          ? parseFloat(statsPrincipalesResult.rows[0].revenus_mois) / parseInt(statsPrincipalesResult.rows[0].reservations_mois)
+        revenu_moyen_par_reservation: statsPrincipalesResult.rows[0].reservations_periode > 0 
+          ? parseFloat(statsPrincipalesResult.rows[0].revenus_periode) / parseInt(statsPrincipalesResult.rows[0].reservations_periode)
           : 0,
         taux_confirmation_aujourdhui: statsPrincipalesResult.rows[0].reservations_aujourdhui > 0
           ? (parseInt(statsPrincipalesResult.rows[0].confirmes_aujourdhui) / parseInt(statsPrincipalesResult.rows[0].reservations_aujourdhui)) * 100
