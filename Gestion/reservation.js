@@ -904,13 +904,14 @@ router.post('/', async (req, res) => {
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
 
-    // Gestion de l'envoi d'email
+    // GESTION DE L'ENVOI D'EMAIL
     let emailResult = null;
     const shouldSendEmail = statut === 'confirmée' && email && email.includes('@');
     
     if (shouldSendEmail) {
       try {
         console.log(`📧 Tentative d'envoi d'email de confirmation à: ${email}`);
+        console.log(`🏟️ Réservation pour: ${nomterrain || 'Terrain ' + numeroterrain}`);
         emailResult = await sendReservationConfirmation(newReservation);
         if (emailResult.success) {
           console.log('✅ Email envoyé avec succès!');
