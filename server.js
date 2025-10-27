@@ -24,6 +24,7 @@ app.use(
     origin: [
       "http://localhost:5173",
       "http://localhost:5174",
+      "http://localhost:5175",
       "https://footspace-reserve.netlify.app",
       "https://frabjous-gaufre-31e862.netlify.app",
       "https://footspace-solutions.vercel.app"
