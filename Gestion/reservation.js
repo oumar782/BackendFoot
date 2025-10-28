@@ -828,7 +828,7 @@ router.post('/', async (req, res) => {
       nomterrain
     } = req.body;
 
-    console.log('📝 Données reçues:', req.body);
+    console.log('📝 Données reçues pour CRÉATION:', req.body);
 
     // Validation des champs obligatoires
     const champsObligatoires = [
@@ -851,6 +851,7 @@ router.post('/', async (req, res) => {
     );
 
     if (champsManquants.length > 0) {
+      console.log('❌ Champs manquants:', champsManquants);
       return res.status(400).json({
         success: false,
         message: `Champs obligatoires manquants: ${champsManquants.map(c => c.message).join(', ')}`
@@ -910,12 +911,12 @@ router.post('/', async (req, res) => {
       nomterrain
     ];
 
-    console.log('🚀 Exécution SQL avec params:', params);
+    console.log('🚀 Exécution SQL CREATE avec params:', params);
 
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
 
-    console.log('✅ Réservation créée:', newReservation);
+    console.log('✅ Réservation créée avec succès:', newReservation);
 
     // Envoi d'email si confirmée
     let emailResult = null;
@@ -968,7 +969,7 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
-    console.log('📝 Données reçues pour modification:', req.body);
+    console.log('📝 Données reçues pour MODIFICATION:', req.body);
 
     // Validation des champs obligatoires
     const champsObligatoires = [
@@ -991,6 +992,7 @@ router.put('/:id', async (req, res) => {
     );
 
     if (champsManquants.length > 0) {
+      console.log('❌ Champs manquants:', champsManquants);
       return res.status(400).json({
         success: false,
         message: `Champs obligatoires manquants: ${champsManquants.map(c => c.message).join(', ')}`
@@ -1062,7 +1064,7 @@ router.put('/:id', async (req, res) => {
     const result = await db.query(sql, params);
     const updatedReservation = result.rows[0];
 
-    console.log('✅ Réservation modifiée:', updatedReservation);
+    console.log('✅ Réservation modifiée avec succès:', updatedReservation);
 
     // Envoi d'email si statut changé vers confirmée
     let emailResult = null;
