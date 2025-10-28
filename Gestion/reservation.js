@@ -4,7 +4,7 @@ import { sendReservationConfirmation, checkEmailConfiguration } from '../service
 
 const router = express.Router();
 
-// 📊 STATISTIQUES ET ANALYTIQUES - VERSION COMPLÈTE ET CORRIGÉE
+// 📊 STATISTIQUES ET ANALYTIQUES - VERSION COMPLÈTE CORRIGÉE
 
 // 📌 ROUTE PRINCIPALE POUR LE TABLEAU DE BORD
 router.get('/dashboard', async (req, res) => {
@@ -27,7 +27,7 @@ router.get('/dashboard', async (req, res) => {
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('year', CURRENT_DATE)), 0) AS revenu_annee,
         
         -- Activité récente
-        COUNT(DISTINCT numeroterrain) FILTER (WHERE statut = 'confirmée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS terrains_actifs_semaine,
+        COUNT(DISTINCT nomterrain) FILTER (WHERE statut = 'confirmée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS terrains_actifs_semaine,
         COUNT(*) FILTER (WHERE statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS annulations_semaine,
         
         -- Clients uniques
@@ -37,7 +37,7 @@ router.get('/dashboard', async (req, res) => {
 
     // 2. Terrains occupés actuellement
     const terrainsOccupes = await db.query(`
-      SELECT COUNT(DISTINCT numeroterrain) AS terrains_occupes_actuels
+      SELECT COUNT(DISTINCT nomterrain) AS terrains_occupes_actuels
       FROM reservation 
       WHERE statut = 'confirmée'
         AND datereservation = CURRENT_DATE
@@ -45,13 +45,13 @@ router.get('/dashboard', async (req, res) => {
         AND heurefin >= CURRENT_TIME
     `);
 
-    // 3. Taux de remplissage (méthode simplifiée et robuste)
+    // 3. Taux de remplissage
     const tauxRemplissage = await db.query(`
       WITH reservations_recentes AS (
         SELECT 
           datereservation,
           COUNT(*) as nb_reservations,
-          COUNT(DISTINCT numeroterrain) as nb_terrains_utilises
+          COUNT(DISTINCT nomterrain) as nb_terrains_utilises
         FROM reservation
         WHERE statut = 'confirmée'
           AND datereservation BETWEEN CURRENT_DATE - INTERVAL '30 days' AND CURRENT_DATE
@@ -73,7 +73,7 @@ router.get('/dashboard', async (req, res) => {
       WHERE nb_terrains_utilises > 0
     `);
 
-    // 4. Données pour les tendances (comparaison avec période précédente)
+    // 4. Données pour les tendances
     const tendances = await db.query(`
       WITH periode_actuelle AS (
         SELECT 
@@ -114,7 +114,6 @@ router.get('/dashboard', async (req, res) => {
 
     // Construction de la réponse
     const data = {
-      // Données principales
       revenus_mois: stats.revenu_mois || 0,
       revenus_aujourdhui: stats.revenu_aujourdhui || 0,
       revenus_annee: stats.revenu_annee || 0,
@@ -125,16 +124,13 @@ router.get('/dashboard', async (req, res) => {
       
       confirmes_aujourdhui: stats.reservations_aujourdhui || 0,
       
-      // Occupation et clients
       terrains_occupes_actuels: terrainsOccupes.rows[0]?.terrains_occupes_actuels || 0,
       clients_actifs: stats.terrains_actifs_semaine || 0,
       clients_uniques: stats.clients_uniques_30j || 0,
       annulations_semaine: stats.annulations_semaine || 0,
       
-      // Performance
       taux_remplissage: tauxRemplissage.rows[0]?.taux_remplissage_moyen || 0,
       
-      // Tendances réelles
       trends: {
         revenus: {
           isPositive: (evolution?.evolution_revenus || 0) >= 0,
@@ -190,13 +186,13 @@ router.get('/statistiques-temps-reel', async (req, res) => {
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('month', CURRENT_DATE)), 0) AS revenu_mois,
         
         -- Activité récente
-        COUNT(DISTINCT numeroterrain) FILTER (WHERE statut = 'confirmée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS terrains_actifs_semaine,
+        COUNT(DISTINCT nomterrain) FILTER (WHERE statut = 'confirmée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS terrains_actifs_semaine,
         COUNT(*) FILTER (WHERE statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS annulations_semaine
       FROM reservation
     `);
 
     const terrainsOccupes = await db.query(`
-      SELECT COUNT(DISTINCT numeroterrain) AS terrains_occupes_actuels
+      SELECT COUNT(DISTINCT nomterrain) AS terrains_occupes_actuels
       FROM reservation 
       WHERE statut = 'confirmée'
         AND datereservation = CURRENT_DATE
@@ -319,7 +315,7 @@ router.get('/taux-remplissage', async (req, res) => {
           SELECT 
             datereservation,
             COUNT(*) as nb_reservations,
-            COUNT(DISTINCT numeroterrain) as nb_terrains
+            COUNT(DISTINCT nomterrain) as nb_terrains
           FROM reservation
           WHERE statut = 'confirmée'
             AND datereservation BETWEEN CURRENT_DATE - INTERVAL '15 days' AND CURRENT_DATE + INTERVAL '15 days'
@@ -360,7 +356,7 @@ router.get('/taux-remplissage', async (req, res) => {
           SELECT 
             date_trunc('month', datereservation) AS debut_mois,
             COUNT(*) as nb_reservations,
-            COUNT(DISTINCT numeroterrain) as nb_terrains_moyen,
+            COUNT(DISTINCT nomterrain) as nb_terrains_moyen,
             COALESCE(SUM(tarif), 0) as revenu_mois
           FROM reservation
           WHERE statut = 'confirmée'
@@ -440,7 +436,7 @@ router.get('/previsions/detaillees', async (req, res) => {
         SELECT 
           datereservation,
           COUNT(*) as nb_reservations,
-          COUNT(DISTINCT numeroterrain) as nb_terrains,
+          COUNT(DISTINCT nomterrain) as nb_terrains,
           COALESCE(SUM(tarif), 0) as revenu_attendu,
           STRING_AGG(DISTINCT typeterrain, ', ') as types_terrains
         FROM reservation
@@ -592,7 +588,6 @@ router.get('/statistiques-avancees', async (req, res) => {
     // 2. Top terrains
     const topTerrains = await db.query(`
       SELECT 
-        numeroterrain,
         nomterrain,
         COUNT(*) as nb_reservations,
         COALESCE(SUM(tarif), 0) as revenu_total,
@@ -600,7 +595,7 @@ router.get('/statistiques-avancees', async (req, res) => {
       FROM reservation
       WHERE statut = 'confirmée'
         AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
-      GROUP BY numeroterrain, nomterrain
+      GROUP BY nomterrain
       ORDER BY nb_reservations DESC
       LIMIT 10
     `);
@@ -678,14 +673,14 @@ router.post('/email/test', async (req, res) => {
       heurereservation: '14:00',
       heurefin: '16:00',
       statut: 'confirmée',
-      numeroterrain: 1,
       nomclient: 'Test',
       prenom: 'Utilisateur',
       email: email,
       telephone: '0123456789',
       typeterrain: 'Synthétique',
       tarif: 150,
-      nomterrain: 'Stade Principal'
+      nomterrain: 'Stade Principal',
+      surface: '11X11'
     };
 
     console.log('🧪 TEST EMAIL MANUEL vers:', email);
@@ -719,7 +714,7 @@ router.post('/email/test', async (req, res) => {
   }
 });
 
-// 🎯 GESTION DES RÉSERVATIONS (ROUTES EXISTANTES)
+// 🎯 GESTION DES RÉSERVATIONS - CRUD COMPLET (SANS NUMEROTERRAIN)
 
 // 📌 Récupérer les réservations
 router.get('/', async (req, res) => {
@@ -732,7 +727,6 @@ router.get('/', async (req, res) => {
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
-        numeroterrain,
         nomclient,
         prenom,
         email,
@@ -815,7 +809,6 @@ router.get('/:id', async (req, res) => {
         TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
         heurereservation,
         statut,
-        numeroterrain,
         nomclient,
         prenom,
         email,
@@ -860,7 +853,6 @@ router.post('/', async (req, res) => {
       datereservation,
       heurereservation,
       statut,
-      numeroterrain,
       nomclient,
       prenom,
       email,
@@ -872,23 +864,42 @@ router.post('/', async (req, res) => {
       nomterrain
     } = req.body;
 
-    if (!datereservation || !heurereservation || !statut || !numeroterrain) {
+    // Validation des champs obligatoires
+    if (!datereservation || !heurereservation || !statut || !nomclient || 
+        !prenom || !email || !telephone || !typeterrain || 
+        !tarif || !surface || !heurefin || !nomterrain) {
       return res.status(400).json({
         success: false,
-        message: 'Champs requis manquants: date, heure, statut et numeroterrain sont obligatoires.'
+        message: 'Tous les champs sont obligatoires.'
+      });
+    }
+
+    // Validation du type de terrain
+    if (!['Normal', 'Synthétique'].includes(typeterrain)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Type de terrain invalide. Doit être "Normal" ou "Synthétique".'
+      });
+    }
+
+    // Validation de la surface
+    if (!['7X7', '9X9', '11X11'].includes(surface)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Surface invalide. Doit être "7X7", "9X9" ou "11X11".'
       });
     }
 
     const sql = `
       INSERT INTO reservation (
-        datereservation, heurereservation, statut, numeroterrain,
+        datereservation, heurereservation, statut,
         nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING numeroreservations as id, *
     `;
 
     const params = [
-      datereservation, heurereservation, statut, numeroterrain,
+      datereservation, heurereservation, statut,
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
     ];
 
@@ -933,7 +944,6 @@ router.put('/:id', async (req, res) => {
       datereservation,
       heurereservation,
       statut,
-      numeroterrain,
       nomclient,
       prenom,
       email,
@@ -967,22 +977,21 @@ router.put('/:id', async (req, res) => {
         datereservation = $1,
         heurereservation = $2,
         statut = $3,
-        numeroterrain = $4,
-        nomclient = $5,
-        prenom = $6,
-        email = $7,
-        telephone = $8,
-        typeterrain = $9,
-        tarif = $10,
-        surface = $11,
-        heurefin = $12,
-        nomterrain = $13
-      WHERE numeroreservations = $14
+        nomclient = $4,
+        prenom = $5,
+        email = $6,
+        telephone = $7,
+        typeterrain = $8,
+        tarif = $9,
+        surface = $10,
+        heurefin = $11,
+        nomterrain = $12
+      WHERE numeroreservations = $13
       RETURNING numeroreservations as id, *
     `;
 
     const params = [
-      datereservation, heurereservation, statut, numeroterrain,
+      datereservation, heurereservation, statut,
       nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain, id
     ];
 
@@ -1127,7 +1136,6 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
   try {
     const sql = `
       SELECT 
-        numeroterrain,
         nomterrain,
         COUNT(*) as nb_reservations,
         STRING_AGG(
@@ -1137,8 +1145,8 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
       FROM reservation 
       WHERE datereservation = CURRENT_DATE 
         AND statut = 'confirmée'
-      GROUP BY numeroterrain, nomterrain
-      ORDER BY numeroterrain
+      GROUP BY nomterrain
+      ORDER BY nomterrain
     `;
 
     const result = await db.query(sql);
