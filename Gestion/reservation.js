@@ -14,23 +14,14 @@ router.get('/dashboard', async (req, res) => {
     // 1. Statistiques de base
     const statsBase = await db.query(`
       SELECT 
-        -- Aujourd'hui
         COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation = CURRENT_DATE) AS reservations_aujourdhui,
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation = CURRENT_DATE), 0) AS revenu_aujourdhui,
-        
-        -- Ce mois
         COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('month', CURRENT_DATE)) AS reservations_mois,
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('month', CURRENT_DATE)), 0) AS revenu_mois,
-        
-        -- Cette année
         COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('year', CURRENT_DATE)) AS reservations_annee,
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('year', CURRENT_DATE)), 0) AS revenu_annee,
-        
-        -- Activité récente
         COUNT(DISTINCT nomterrain) FILTER (WHERE statut = 'confirmée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS terrains_actifs_semaine,
         COUNT(*) FILTER (WHERE statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS annulations_semaine,
-        
-        -- Clients uniques
         COUNT(DISTINCT email) FILTER (WHERE statut = 'confirmée' AND datereservation >= CURRENT_DATE - INTERVAL '30 days') AS clients_uniques_30j
       FROM reservation
     `);
@@ -112,25 +103,19 @@ router.get('/dashboard', async (req, res) => {
     const stats = statsBase.rows[0];
     const evolution = tendances.rows[0];
 
-    // Construction de la réponse
     const data = {
       revenus_mois: stats.revenu_mois || 0,
       revenus_aujourdhui: stats.revenu_aujourdhui || 0,
       revenus_annee: stats.revenu_annee || 0,
-      
       reservations_mois: stats.reservations_mois || 0,
       reservations_aujourdhui: stats.reservations_aujourdhui || 0,
       reservations_annee: stats.reservations_annee || 0,
-      
       confirmes_aujourdhui: stats.reservations_aujourdhui || 0,
-      
       terrains_occupes_actuels: terrainsOccupes.rows[0]?.terrains_occupes_actuels || 0,
       clients_actifs: stats.terrains_actifs_semaine || 0,
       clients_uniques: stats.clients_uniques_30j || 0,
       annulations_semaine: stats.annulations_semaine || 0,
-      
       taux_remplissage: tauxRemplissage.rows[0]?.taux_remplissage_moyen || 0,
-      
       trends: {
         revenus: {
           isPositive: (evolution?.evolution_revenus || 0) >= 0,
@@ -177,15 +162,10 @@ router.get('/statistiques-temps-reel', async (req, res) => {
   try {
     const stats = await db.query(`
       SELECT 
-        -- Aujourd'hui
         COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation = CURRENT_DATE) AS reservations_aujourdhui,
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation = CURRENT_DATE), 0) AS revenu_aujourdhui,
-        
-        -- Ce mois
         COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('month', CURRENT_DATE)) AS reservations_mois,
         COALESCE(SUM(tarif) FILTER (WHERE statut = 'confirmée' AND datereservation >= date_trunc('month', CURRENT_DATE)), 0) AS revenu_mois,
-        
-        -- Activité récente
         COUNT(DISTINCT nomterrain) FILTER (WHERE statut = 'confirmée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS terrains_actifs_semaine,
         COUNT(*) FILTER (WHERE statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days') AS annulations_semaine
       FROM reservation
@@ -384,7 +364,6 @@ router.get('/taux-remplissage', async (req, res) => {
 
     const result = await db.query(sql);
 
-    // Calcul des statistiques
     const tauxList = result.rows.map(row => parseFloat(row.taux_remplissage) || 0).filter(t => t > 0);
     const tauxMoyen = tauxList.length > 0 ? 
       Math.round(tauxList.reduce((a, b) => a + b, 0) / tauxList.length) : 0;
@@ -469,7 +448,6 @@ router.get('/previsions/detaillees', async (req, res) => {
 
     const result = await db.query(sql);
 
-    // Compléter avec les dates manquantes
     const today = new Date();
     const dateFin = new Date(today);
     dateFin.setDate(today.getDate() + joursNumber);
@@ -547,29 +525,19 @@ router.get('/previsions/detaillees', async (req, res) => {
 // 📌 STATISTIQUES AVANCÉES
 router.get('/statistiques-avancees', async (req, res) => {
   try {
-    // 1. Performance globale
     const performance = await db.query(`
       SELECT 
-        -- Taux de confirmation
         ROUND(
           (COUNT(*) FILTER (WHERE statut = 'confirmée') * 100.0 / NULLIF(COUNT(*), 0)
         ), 2) AS taux_confirmation,
-        
-        -- Taux d'annulation
         ROUND(
           (COUNT(*) FILTER (WHERE statut = 'annulée') * 100.0 / NULLIF(COUNT(*), 0)
         ), 2) AS taux_annulation,
-        
-        -- Revenu moyen
         ROUND(AVG(tarif) FILTER (WHERE statut = 'confirmée'), 2) AS revenu_moyen,
-        
-        -- Réservations par jour moyen
         ROUND(
           COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation >= CURRENT_DATE - INTERVAL '30 days') / 30.0, 
           1
         ) AS reservations_par_jour_moyen,
-        
-        -- Client fidélité
         COUNT(DISTINCT email) FILTER (WHERE statut = 'confirmée') AS total_clients,
         COUNT(DISTINCT email) FILTER (
           WHERE statut = 'confirmée' 
@@ -585,7 +553,6 @@ router.get('/statistiques-avancees', async (req, res) => {
       WHERE datereservation >= CURRENT_DATE - INTERVAL '90 days'
     `);
 
-    // 2. Top terrains
     const topTerrains = await db.query(`
       SELECT 
         nomterrain,
@@ -600,7 +567,6 @@ router.get('/statistiques-avancees', async (req, res) => {
       LIMIT 10
     `);
 
-    // 3. Horaires populaires
     const horairesPopulaires = await db.query(`
       SELECT 
         EXTRACT(HOUR FROM heurereservation) as heure_debut,
@@ -714,7 +680,7 @@ router.post('/email/test', async (req, res) => {
   }
 });
 
-// 🎯 GESTION DES RÉSERVATIONS - CRUD COMPLET (SANS NUMEROTERRAIN)
+// 🎯 CRUD COMPLET DES RÉSERVATIONS
 
 // 📌 Récupérer les réservations
 router.get('/', async (req, res) => {
@@ -767,12 +733,10 @@ router.get('/', async (req, res) => {
       params.push(date);
     }
 
-    // Comptage total
     const countSql = `SELECT COUNT(*) as total_count FROM (${sql}) as subquery`;
     const countResult = await db.query(countSql, params);
     const totalCount = parseInt(countResult.rows[0].total_count);
 
-    // Pagination
     const offset = (page - 1) * limit;
     sql += ` ORDER BY datereservation DESC, heurereservation DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
     params.push(parseInt(limit), offset);
@@ -864,17 +828,36 @@ router.post('/', async (req, res) => {
       nomterrain
     } = req.body;
 
+    console.log('📝 Données reçues:', req.body);
+
     // Validation des champs obligatoires
-    if (!datereservation || !heurereservation || !statut || !nomclient || 
-        !prenom || !email || !telephone || !typeterrain || 
-        !tarif || !surface || !heurefin || !nomterrain) {
+    const champsObligatoires = [
+      { nom: 'datereservation', valeur: datereservation, message: 'Date de réservation' },
+      { nom: 'heurereservation', valeur: heurereservation, message: 'Heure de début' },
+      { nom: 'heurefin', valeur: heurefin, message: 'Heure de fin' },
+      { nom: 'statut', valeur: statut, message: 'Statut' },
+      { nom: 'nomclient', valeur: nomclient, message: 'Nom du client' },
+      { nom: 'prenom', valeur: prenom, message: 'Prénom du client' },
+      { nom: 'email', valeur: email, message: 'Email' },
+      { nom: 'telephone', valeur: telephone, message: 'Téléphone' },
+      { nom: 'typeterrain', valeur: typeterrain, message: 'Type de terrain' },
+      { nom: 'tarif', valeur: tarif, message: 'Tarif' },
+      { nom: 'surface', valeur: surface, message: 'Surface' },
+      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' }
+    ];
+
+    const champsManquants = champsObligatoires.filter(champ => 
+      !champ.valeur || champ.valeur.toString().trim() === ''
+    );
+
+    if (champsManquants.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Tous les champs sont obligatoires.'
+        message: `Champs obligatoires manquants: ${champsManquants.map(c => c.message).join(', ')}`
       });
     }
 
-    // Validation du type de terrain
+    // Validations supplémentaires
     if (!['Normal', 'Synthétique'].includes(typeterrain)) {
       return res.status(400).json({
         success: false,
@@ -882,11 +865,25 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Validation de la surface
     if (!['7X7', '9X9', '11X11'].includes(surface)) {
       return res.status(400).json({
         success: false,
         message: 'Surface invalide. Doit être "7X7", "9X9" ou "11X11".'
+      });
+    }
+
+    if (!email.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Format d\'email invalide.'
+      });
+    }
+
+    const tarifNumerique = parseFloat(tarif);
+    if (isNaN(tarifNumerique) || tarifNumerique <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tarif invalide. Doit être un nombre positif.'
       });
     }
 
@@ -899,12 +896,26 @@ router.post('/', async (req, res) => {
     `;
 
     const params = [
-      datereservation, heurereservation, statut,
-      nomclient, prenom, email, telephone, typeterrain, parseFloat(tarif), surface, heurefin, nomterrain
+      datereservation, 
+      heurereservation, 
+      statut,
+      nomclient, 
+      prenom, 
+      email, 
+      telephone, 
+      typeterrain, 
+      tarifNumerique, 
+      surface, 
+      heurefin, 
+      nomterrain
     ];
+
+    console.log('🚀 Exécution SQL avec params:', params);
 
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
+
+    console.log('✅ Réservation créée:', newReservation);
 
     // Envoi d'email si confirmée
     let emailResult = null;
@@ -913,6 +924,7 @@ router.post('/', async (req, res) => {
     if (shouldSendEmail) {
       try {
         emailResult = await sendReservationConfirmation(newReservation);
+        console.log('📧 Email envoyé:', emailResult);
       } catch (emailError) {
         console.error('❌ Erreur envoi email:', emailError);
         emailResult = { success: false, error: emailError.message };
@@ -931,7 +943,8 @@ router.post('/', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
-      error: error.message
+      error: error.message,
+      details: error.detail
     });
   }
 });
@@ -955,6 +968,35 @@ router.put('/:id', async (req, res) => {
       nomterrain
     } = req.body;
 
+    console.log('📝 Données reçues pour modification:', req.body);
+
+    // Validation des champs obligatoires
+    const champsObligatoires = [
+      { nom: 'datereservation', valeur: datereservation, message: 'Date de réservation' },
+      { nom: 'heurereservation', valeur: heurereservation, message: 'Heure de début' },
+      { nom: 'heurefin', valeur: heurefin, message: 'Heure de fin' },
+      { nom: 'statut', valeur: statut, message: 'Statut' },
+      { nom: 'nomclient', valeur: nomclient, message: 'Nom du client' },
+      { nom: 'prenom', valeur: prenom, message: 'Prénom du client' },
+      { nom: 'email', valeur: email, message: 'Email' },
+      { nom: 'telephone', valeur: telephone, message: 'Téléphone' },
+      { nom: 'typeterrain', valeur: typeterrain, message: 'Type de terrain' },
+      { nom: 'tarif', valeur: tarif, message: 'Tarif' },
+      { nom: 'surface', valeur: surface, message: 'Surface' },
+      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' }
+    ];
+
+    const champsManquants = champsObligatoires.filter(champ => 
+      !champ.valeur || champ.valeur.toString().trim() === ''
+    );
+
+    if (champsManquants.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Champs obligatoires manquants: ${champsManquants.map(c => c.message).join(', ')}`
+      });
+    }
+
     // Récupérer l'ancienne réservation
     const oldReservationResult = await db.query(
       'SELECT statut, email FROM reservation WHERE numeroreservations = $1',
@@ -970,6 +1012,15 @@ router.put('/:id', async (req, res) => {
 
     const oldReservation = oldReservationResult.rows[0];
     const oldStatus = oldReservation.statut;
+
+    // Validation du tarif
+    const tarifNumerique = parseFloat(tarif);
+    if (isNaN(tarifNumerique) || tarifNumerique <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tarif invalide. Doit être un nombre positif.'
+      });
+    }
 
     const sql = `
       UPDATE reservation 
@@ -991,12 +1042,27 @@ router.put('/:id', async (req, res) => {
     `;
 
     const params = [
-      datereservation, heurereservation, statut,
-      nomclient, prenom, email, telephone, typeterrain, parseFloat(tarif), surface, heurefin, nomterrain, id
+      datereservation, 
+      heurereservation, 
+      statut,
+      nomclient, 
+      prenom, 
+      email, 
+      telephone, 
+      typeterrain, 
+      tarifNumerique, 
+      surface, 
+      heurefin, 
+      nomterrain, 
+      id
     ];
+
+    console.log('🚀 Exécution SQL UPDATE avec params:', params);
 
     const result = await db.query(sql, params);
     const updatedReservation = result.rows[0];
+
+    console.log('✅ Réservation modifiée:', updatedReservation);
 
     // Envoi d'email si statut changé vers confirmée
     let emailResult = null;
@@ -1006,6 +1072,7 @@ router.put('/:id', async (req, res) => {
     if (becameConfirmed && hasValidEmail) {
       try {
         emailResult = await sendReservationConfirmation(updatedReservation);
+        console.log('📧 Email envoyé:', emailResult);
       } catch (emailError) {
         console.error('❌ Erreur envoi email:', emailError);
         emailResult = { success: false, error: emailError.message };
@@ -1024,7 +1091,8 @@ router.put('/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
-      error: error.message
+      error: error.message,
+      details: error.detail
     });
   }
 });
