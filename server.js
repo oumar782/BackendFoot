@@ -1,219 +1,205 @@
-import express from 'express';
-import db from '../db.js';
+import express from "express";
+import db from "./db.js";
+import cors from 'cors';
+import dotenv from 'dotenv';
 
-const router = express.Router();
+// Importation des routes
+import creneauxRoutes from './Gestion/creneaux.js';
+import Reservation from './Gestion/reservation.js';
+import Contact from './Gestion/contact.js';
+import creneauxRoute from './Gestion/gestionCreneaux.js';
+import User from './Gestion/user.js';
+import Terrain from './Gestion/terrain.js';
+import Client from './Gestion/clients.js';
+import CalendriersRouter from './Gestion/calendrier.js';
+import demo from './Gestion/demonstration.js';
+import prev from './Gestion/prev.js';
 
-// ✅ Appliquer CORS spécifiquement pour cette route
-router.use((req, res, next) => {
-  const origin = req.headers.origin;
-  const allowedOrigins = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:5175",
-    "https://footspace-reserve.netlify.app", 
-    "https://frabjous-gaufre-31e862.netlify.app",
-    "https://footspace-solutions.vercel.app"
-  ];
+dotenv.config();
+const app = express();
+
+// ✅ CORS bien configuré
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:5175",
+      "https://footspace-reserve.netlify.app",
+      "https://frabjous-gaufre-31e862.netlify.app",
+      "https://footspace-solutions.vercel.app"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+// 📄 Route racine
+app.get('/', (req, res) => {
+  res.json({
+    message: '✅ Serveur backend FootSpace en marche',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// Utilisation des routeurs
+app.use('/api/creneaux', creneauxRoutes);
+app.use('/api/clients', Client);
+app.use('/api/user', User);
+app.use('/api/terrain', Terrain);
+app.use('/api/reservation', Reservation);
+app.use('/api/contact', Contact);
+app.use('/api/gestioncreneaux', creneauxRoute);
+app.use('/api/demonstration', demo);
+app.use('/api/prevision', prev);
+app.use('/api/calendriers', CalendriersRouter);
+
+// 🏥 Health check endpoint amélioré
+app.get('/api/health', async (req, res) => {
+  try {
+    // Tester la connexion à la base de données
+    const dbResult = await db.query('SELECT NOW() as current_time');
+    
+    res.status(200).json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      database: 'connected',
+      databaseTime: dbResult.rows[0].current_time,
+      resendConfigured: !!process.env.RESEND_API_KEY,
+      cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'unhealthy',
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
+// 📧 Route pour tester l'envoi d'email
+app.get('/api/test-email', async (req, res) => {
+  try {
+    const { sendReservationConfirmation } = await import('./services/emailService.js');
+    
+    const testReservation = {
+      id: 'test-' + Date.now(),
+      datereservation: new Date().toISOString().split('T')[0],
+      heurereservation: '14:00',
+      heurefin: '16:00',
+      statut: 'confirmée',
+      idclient: 1,
+      numeroterrain: 1,
+      nomclient: 'Test',
+      prenom: 'Utilisateur',
+      email: 'test@example.com', // Remplacez par un email valide pour tester
+      telephone: '0123456789',
+      typeterrain: 'Synthétique',
+      tarif: 150,
+      surface: '100m²',
+      nomterrain: 'Stade Principal'
+    };
+
+    console.log('🧪 Test d\'envoi d\'email en cours...');
+    const result = await sendReservationConfirmation(testReservation);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Email de test envoyé avec succès' : 'Erreur lors de l\'envoi',
+      error: result.error,
+      reservation: testReservation,
+      resendConfigured: !!process.env.RESEND_API_KEY
+    });
+  } catch (error) {
+    console.error('❌ Erreur test email:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors du test d\'email',
+      error: error.message,
+      resendConfigured: !!process.env.RESEND_API_KEY
+    });
+  }
+});
+
+// 🔧 Route pour vérifier la configuration
+app.get('/api/config', (req, res) => {
+  // Ne pas exposer les clés sensibles en production
+  const safeConfig = {
+    success: true,
+    nodeEnv: process.env.NODE_ENV,
+    resendConfigured: !!process.env.RESEND_API_KEY,
+    cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME,
+    databaseConfigured: !!process.env.DATABASE_URL,
+    keyLengths: {
+      resend: process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0,
+      cloudinary: process.env.CLOUDINARY_API_KEY ? process.env.CLOUDINARY_API_KEY.length : 0
+    }
+  };
   
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  next();
+  res.json(safeConfig);
 });
 
-// Options pour les requêtes preflight
-router.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.status(200).send();
-});
-
-// GET tous les clients
-router.get('/', async (req, res) => {
-  try {
-    console.log('📥 Requête GET /api/clients reçue');
-    const result = await db.query('SELECT * FROM clients ORDER BY idclient DESC');
-    
-    res.json({
-      success: true,
-      data: result.rows,
-      count: result.rows.length,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('❌ Erreur lors de la récupération des clients:', error);
-    res.status(500).json({
+// 🚨 Gestion des erreurs améliorée
+app.use((err, req, res, next) => {
+  console.error('❌ Erreur:', err.stack);
+  
+  if (err.name === 'ValidationError') {
+    return res.status(422).json({
       success: false,
-      message: 'Erreur serveur lors de la récupération des clients',
-      error: error.message
+      message: 'Erreur de validation',
+      errors: err.errors
     });
   }
-});
 
-// GET client par ID
-router.get('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log(`📥 Requête GET /api/clients/${id} reçue`);
-    
-    const result = await db.query('SELECT * FROM clients WHERE idclient = $1', [id]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Client non trouvé'
-      });
-    }
-    
-    res.json({
-      success: true,
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error(`❌ Erreur lors de la récupération du client ${req.params.id}:`, error);
-    res.status(500).json({
+  // Erreur Resend spécifique
+  if (err.message?.includes('Resend') || err.message?.includes('email')) {
+    return res.status(500).json({
       success: false,
-      message: 'Erreur serveur lors de la récupération du client',
-      error: error.message
+      message: 'Erreur lors de l\'envoi de l\'email',
+      error: process.env.NODE_ENV === 'development' ? err.message : 'Service email temporairement indisponible'
     });
+  }
+
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Erreur interne du serveur',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
+// 🚀 Lancement serveur avec logs détaillés
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`
+🚀 Serveur FootSpace lancé sur le port ${PORT}
+🌍 Environnement: ${process.env.NODE_ENV || 'development'}
+📧 Resend configuré: ${process.env.RESEND_API_KEY ? '✅ OUI' : '❌ NON'}
+☁️  Cloudinary configuré: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ OUI' : '❌ NON'}
+🗄️  Base de données: ${process.env.DATABASE_URL ? '✅ CONFIGURÉE' : '❌ NON CONFIGURÉE'}
+  
+📋 Routes disponibles:
+   • GET  /api/health - Santé de l'API
+   • GET  /api/config - Configuration
+   • GET  /api/test-email - Test d'envoi d'email
+   • GET  /api/reservation - Réservations
+   • POST /api/reservation - Nouvelle réservation
+  `);
+  
+  // Avertissements de configuration
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('⚠️  RESEND_API_KEY manquante - Les emails ne fonctionneront pas');
+  }
+  if (!process.env.DATABASE_URL) {
+    console.warn('⚠️  DATABASE_URL manquante - La base de données ne fonctionnera pas');
   }
 });
 
-// POST nouveau client
-router.post('/', async (req, res) => {
-  try {
-    console.log('📥 Requête POST /api/clients reçue:', req.body);
-    
-    const { nomclient, prenom, email, telephone, motdepasse } = req.body;
-    
-    // Validation des données requises
-    if (!nomclient || !prenom || !email || !telephone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nom, prénom, email et téléphone sont obligatoires'
-      });
-    }
-    
-    const result = await db.query(
-      `INSERT INTO clients (nomclient, prenom, email, telephone, motdepasse) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING *`,
-      [nomclient, prenom, email, telephone, motdepasse || null]
-    );
-    
-    res.status(201).json({
-      success: true,
-      message: 'Client créé avec succès',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error('❌ Erreur lors de la création du client:', error);
-    
-    // Gestion des erreurs de contrainte unique (email dupliqué)
-    if (error.code === '23505') {
-      return res.status(409).json({
-        success: false,
-        message: 'Un client avec cet email existe déjà'
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: 'Erreur serveur lors de la création du client',
-      error: error.message
-    });
-  }
-});
-
-// PUT modifier un client
-router.put('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log(`📥 Requête PUT /api/clients/${id} reçue:`, req.body);
-    
-    const { nomclient, prenom, email, telephone, motdepasse } = req.body;
-    
-    const result = await db.query(
-      `UPDATE clients 
-       SET nomclient = $1, prenom = $2, email = $3, telephone = $4, motdepasse = $5
-       WHERE idclient = $6 
-       RETURNING *`,
-      [nomclient, prenom, email, telephone, motdepasse, id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Client non trouvé'
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: 'Client modifié avec succès',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error(`❌ Erreur lors de la modification du client ${req.params.id}:`, error);
-    
-    if (error.code === '23505') {
-      return res.status(409).json({
-        success: false,
-        message: 'Un client avec cet email existe déjà'
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: 'Erreur serveur lors de la modification du client',
-      error: error.message
-    });
-  }
-});
-
-// DELETE supprimer un client
-router.delete('/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log(`📥 Requête DELETE /api/clients/${id} reçue`);
-    
-    const result = await db.query(
-      'DELETE FROM clients WHERE idclient = $1 RETURNING *',
-      [id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Client non trouvé'
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: 'Client supprimé avec succès',
-      data: result.rows[0]
-    });
-  } catch (error) {
-    console.error(`❌ Erreur lors de la suppression du client ${req.params.id}:`, error);
-    
-    // Gestion des erreurs de clé étrangère
-    if (error.code === '23503') {
-      return res.status(409).json({
-        success: false,
-        message: 'Impossible de supprimer le client car il a des réservations associées'
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      message: 'Erreur serveur lors de la suppression du client',
-      error: error.message
-    });
-  }
-});
-
-export default router;
+export default app;
