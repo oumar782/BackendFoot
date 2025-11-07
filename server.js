@@ -18,47 +18,33 @@ import prev from './Gestion/prev.js';
 dotenv.config();
 const app = express();
 
-// ✅ CORS configuré pour accepter tous les domaines Netlify
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Autoriser les requêtes sans origine (comme les apps mobiles, Postman, etc.)
-      if (!origin) return callback(null, true);
-      
-      // Liste des domaines autorisés
-      const allowedOrigins = [
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-        "https://footspace-reserve.netlify.app",
-        "https://frabjous-gaufre-31e862.netlify.app",
-        "https://footspace-solutions.vercel.app"
-      ];
-      
-      // Vérifier si l'origine est dans la liste des autorisées
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      
-      // Autoriser tous les sous-domaines Netlify
-      if (origin.includes('.netlify.app')) {
-        return callback(null, true);
-      }
-      
-      // Autoriser les domaines Netlify spécifiques
-      const netlifyRegex = /https:\/\/([a-zA-Z0-9-]+)\.netlify\.app$/;
-      if (netlifyRegex.test(origin)) {
-        return callback(null, true);
-      }
-      
-      // Rejeter les autres origines
-      callback(new Error('Not allowed by CORS'));
-    },
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
-  })
-);
+// ✅ CORS ULTRA-PERMISSIF - Solution garantie
+app.use(cors({
+  origin: true, // Autorise toutes les origines
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+}));
+
+// Alternative plus sécurisée mais toujours permissive :
+// app.use(cors({
+//   origin: [
+//     "http://localhost:5173",
+//     "http://localhost:5174", 
+//     "http://localhost:5175",
+//     "https://footspace-reserve.netlify.app",
+//     "https://frabjous-gaufre-31e862.netlify.app",
+//     "https://footspace-solutions.vercel.app",
+//     /\.netlify\.app$/,
+//     /\.vercel\.app$/
+//   ],
+//   credentials: true,
+//   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+//   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+// }));
+
+// Middleware pour gérer les pré-vols OPTIONS manuellement
+app.options('*', cors());
 
 app.use(express.json());
 
@@ -125,7 +111,7 @@ app.get('/api/test-email', async (req, res) => {
       numeroterrain: 1,
       nomclient: 'Test',
       prenom: 'Utilisateur',
-      email: 'test@example.com', // Remplacez par un email valide pour tester
+      email: 'test@example.com',
       telephone: '0123456789',
       typeterrain: 'Synthétique',
       tarif: 150,
@@ -156,85 +142,29 @@ app.get('/api/test-email', async (req, res) => {
 
 // 🔧 Route pour vérifier la configuration
 app.get('/api/config', (req, res) => {
-  // Ne pas exposer les clés sensibles en production
   const safeConfig = {
     success: true,
     nodeEnv: process.env.NODE_ENV,
     resendConfigured: !!process.env.RESEND_API_KEY,
     cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME,
     databaseConfigured: !!process.env.DATABASE_URL,
-    keyLengths: {
-      resend: process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0,
-      cloudinary: process.env.CLOUDINARY_API_KEY ? process.env.CLOUDINARY_API_KEY.length : 0
-    }
+    corsEnabled: true
   };
   
   res.json(safeConfig);
 });
 
-// 🚨 Gestion des erreurs améliorée
-app.use((err, req, res, next) => {
-  console.error('❌ Erreur:', err.stack);
-  
-  if (err.name === 'ValidationError') {
-    return res.status(422).json({
-      success: false,
-      message: 'Erreur de validation',
-      errors: err.errors
-    });
-  }
-
-  // Erreur CORS spécifique
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({
-      success: false,
-      message: 'Accès interdit par la politique CORS',
-      origin: req.headers.origin
-    });
-  }
-
-  // Erreur Resend spécifique
-  if (err.message?.includes('Resend') || err.message?.includes('email')) {
-    return res.status(500).json({
-      success: false,
-      message: 'Erreur lors de l\'envoi de l\'email',
-      error: process.env.NODE_ENV === 'development' ? err.message : 'Service email temporairement indisponible'
-    });
-  }
-
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Erreur interne du serveur',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
-
-// 🚀 Lancement serveur avec logs détaillés
+// 🚀 Lancement serveur
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`
 🚀 Serveur FootSpace lancé sur le port ${PORT}
 🌍 Environnement: ${process.env.NODE_ENV || 'development'}
+🌐 CORS: ✅ ACTIVÉ POUR TOUTES LES ORIGINES
 📧 Resend configuré: ${process.env.RESEND_API_KEY ? '✅ OUI' : '❌ NON'}
 ☁️  Cloudinary configuré: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ OUI' : '❌ NON'}
 🗄️  Base de données: ${process.env.DATABASE_URL ? '✅ CONFIGURÉE' : '❌ NON CONFIGURÉE'}
-🌐 CORS configuré pour tous les domaines Netlify: ✅ OUI
-  
-📋 Routes disponibles:
-   • GET  /api/health - Santé de l'API
-   • GET  /api/config - Configuration
-   • GET  /api/test-email - Test d'envoi d'email
-   • GET  /api/reservation - Réservations
-   • POST /api/reservation - Nouvelle réservation
   `);
-  
-  // Avertissements de configuration
-  if (!process.env.RESEND_API_KEY) {
-    console.warn('⚠️  RESEND_API_KEY manquante - Les emails ne fonctionneront pas');
-  }
-  if (!process.env.DATABASE_URL) {
-    console.warn('⚠️  DATABASE_URL manquante - La base de données ne fonctionnera pas');
-  }
 });
 
 export default app;
