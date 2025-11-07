@@ -18,17 +18,42 @@ import prev from './Gestion/prev.js';
 dotenv.config();
 const app = express();
 
-// ✅ CORS bien configuré
+// ✅ CORS configuré pour accepter tous les domaines Netlify
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://localhost:5175",
-      "https://footspace-reserve.netlify.app",
-      "https://frabjous-gaufre-31e862.netlify.app",
-      "https://footspace-solutions.vercel.app"
-    ],
+    origin: (origin, callback) => {
+      // Autoriser les requêtes sans origine (comme les apps mobiles, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
+      // Liste des domaines autorisés
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "https://footspace-reserve.netlify.app",
+        "https://frabjous-gaufre-31e862.netlify.app",
+        "https://footspace-solutions.vercel.app"
+      ];
+      
+      // Vérifier si l'origine est dans la liste des autorisées
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      // Autoriser tous les sous-domaines Netlify
+      if (origin.includes('.netlify.app')) {
+        return callback(null, true);
+      }
+      
+      // Autoriser les domaines Netlify spécifiques
+      const netlifyRegex = /https:\/\/([a-zA-Z0-9-]+)\.netlify\.app$/;
+      if (netlifyRegex.test(origin)) {
+        return callback(null, true);
+      }
+      
+      // Rejeter les autres origines
+      callback(new Error('Not allowed by CORS'));
+    },
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -159,6 +184,15 @@ app.use((err, req, res, next) => {
     });
   }
 
+  // Erreur CORS spécifique
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      success: false,
+      message: 'Accès interdit par la politique CORS',
+      origin: req.headers.origin
+    });
+  }
+
   // Erreur Resend spécifique
   if (err.message?.includes('Resend') || err.message?.includes('email')) {
     return res.status(500).json({
@@ -184,6 +218,7 @@ app.listen(PORT, () => {
 📧 Resend configuré: ${process.env.RESEND_API_KEY ? '✅ OUI' : '❌ NON'}
 ☁️  Cloudinary configuré: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ OUI' : '❌ NON'}
 🗄️  Base de données: ${process.env.DATABASE_URL ? '✅ CONFIGURÉE' : '❌ NON CONFIGURÉE'}
+🌐 CORS configuré pour tous les domaines Netlify: ✅ OUI
   
 📋 Routes disponibles:
    • GET  /api/health - Santé de l'API
