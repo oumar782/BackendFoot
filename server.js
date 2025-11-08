@@ -1,23 +1,24 @@
 import express from "express";
 import dotenv from "dotenv";
 import pool from "./db.js";
-// Importation des routes
+
+// Importation CORRECTE des routes (vérifiez que ce sont des routes, pas des modèles)
 import creneauxRoutes from './Gestion/creneaux.js';
-import Reservation from './Gestion/reservation.js';
-import Contact from './Gestion/contact.js';
+import reservationRoutes from './Gestion/reservation.js'; // Changé de Reservation à reservationRoutes
+import contactRoutes from './Gestion/contact.js'; // Changé de Contact à contactRoutes
 import creneauxRoute from './Gestion/gestionCreneaux.js';
-import User from './Gestion/user.js';
-import Terrain from './Gestion/terrain.js';
-import Client from './Gestion/clients.js';
-import CalendriersRouter from './Gestion/calendrier.js';
-import demo from './Gestion/demonstration.js';
-import prev from './Gestion/prev.js';
+import userRoutes from './Gestion/user.js'; // Changé de User à userRoutes
+import terrainRoutes from './Gestion/terrain.js'; // Changé de Terrain à terrainRoutes
+import clientRoutes from './Gestion/clients.js'; // Changé de Client à clientRoutes
+import calendriersRoutes from './Gestion/calendrier.js'; // Changé de CalendriersRouter à calendriersRoutes
+import demoRoutes from './Gestion/demonstration.js'; // Changé de demo à demoRoutes
+import prevRoutes from './Gestion/prev.js'; // Changé de prev à prevRoutes
 
 dotenv.config();
 
 const app = express();
 
-// ✅ Configuration CORS corrigée
+// ✅ Configuration CORS
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
@@ -54,23 +55,36 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// ✅ Routes
+// ✅ Routes CORRIGÉES (utilisation de variables de routes, pas de modèles)
 app.use('/api/creneaux', creneauxRoutes);
-app.use('/api/clients', Client);
-app.use('/api/user', User);
-app.use('/api/terrain', Terrain);
-app.use('/api/reservation', Reservation);
-app.use('/api/contact', Contact);
+app.use('/api/clients', clientRoutes);
+app.use('/api/user', userRoutes);
+app.use('/api/terrain', terrainRoutes);
+app.use('/api/reservation', reservationRoutes);
+app.use('/api/contact', contactRoutes);
 app.use('/api/gestioncreneaux', creneauxRoute);
-app.use('/api/demonstration', demo);
-app.use('/api/prevision', prev);
-app.use('/api/calendriers', CalendriersRouter);
+app.use('/api/demonstration', demoRoutes);
+app.use('/api/prevision', prevRoutes);
+app.use('/api/calendriers', calendriersRoutes);
 
 app.get("/", (req, res) => {
-  res.send("✅ Backend Blackbook opérationnel (CORS activé)");
+  res.send("✅ Backend FootSpace opérationnel (CORS activé)");
 });
 
-// Pour le développement local
+// Gestion des erreurs globales
+app.use((err, req, res, next) => {
+  console.error('Erreur serveur:', err);
+  res.status(500).json({ 
+    error: 'Erreur interne du serveur',
+    message: err.message 
+  });
+});
+
+// Route 404
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Route non trouvée' });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
