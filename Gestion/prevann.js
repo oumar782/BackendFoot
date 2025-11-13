@@ -276,293 +276,75 @@ router.get('/analyse-temporelle-annulations', async (req, res) => {
   }
 });
 
-// 🔮 PRÉVISIONS AMÉLIORÉES - Analyse par semaine, jour et mois
+// 🔮 Prévisions des annulations futures
 router.get('/previsions-annulations', async (req, res) => {
   try {
     const { periode = '30' } = req.query;
     
-    // 1. Prévisions quotidiennes détaillées
-    const previsionsQuotidiennes = await db.query(`
-      WITH dates_futures AS (
-        SELECT generate_series(
-          CURRENT_DATE,
-          CURRENT_DATE + INTERVAL '${periode} days',
-          '1 day'::interval
-        )::date as date_future
-      )
-      SELECT 
-        df.date_future,
-        TO_CHAR(df.date_future, 'YYYY-MM-DD') as date_iso,
-        TO_CHAR(df.date_future, 'DD/MM') as date_courte,
-        TO_CHAR(df.date_future, 'Day') as jour_semaine,
-        EXTRACT(DOW FROM df.date_future) as num_jour_semaine,
-        EXTRACT(WEEK FROM df.date_future) as semaine_annee,
-        EXTRACT(MONTH FROM df.date_future) as mois,
-        
-        -- Réservations confirmées pour cette date
-        COUNT(r.numeroreservations) as reservations_confirmees,
-        COALESCE(SUM(r.tarif), 0) as revenu_attendu,
-        
-        -- Statistiques historiques pour ce jour de la semaine
-        (
-          SELECT COUNT(*) 
-          FROM reservation rh 
-          WHERE EXTRACT(DOW FROM rh.datereservation) = EXTRACT(DOW FROM df.date_future)
-          AND rh.statut = 'annulée'
-          AND rh.datereservation >= CURRENT_DATE - INTERVAL '90 days'
-        ) as annulations_historiques_jour,
-        
-        -- Taux d'annulation historique pour ce jour
-        (
-          SELECT ROUND(
-            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-            NULLIF(COUNT(*), 0)
-            ), 2
-          )
-          FROM reservation rh 
-          WHERE EXTRACT(DOW FROM rh.datereservation) = EXTRACT(DOW FROM df.date_future)
-          AND rh.datereservation >= CURRENT_DATE - INTERVAL '90 days'
-        ) as taux_annulation_historique_jour,
-        
-        -- Nombre moyen d'annulations pour ce jour
-        (
-          SELECT ROUND(AVG(annulations_jour), 2)
-          FROM (
-            SELECT COUNT(*) as annulations_jour
-            FROM reservation rh 
-            WHERE EXTRACT(DOW FROM rh.datereservation) = EXTRACT(DOW FROM df.date_future)
-            AND rh.statut = 'annulée'
-            AND rh.datereservation >= CURRENT_DATE - INTERVAL '90 days'
-            GROUP BY rh.datereservation
-          ) stats
-        ) as annulations_moyennes_jour
-        
-      FROM dates_futures df
-      LEFT JOIN reservation r ON r.datereservation = df.date_future AND r.statut = 'confirmée'
-      GROUP BY df.date_future
-      ORDER BY df.date_future ASC
-    `);
-
-    // 2. Prévisions hebdomadaires
-    const previsionsHebdomadaires = await db.query(`
-      WITH semaines_futures AS (
+    const result = await db.query(`
+      WITH historique_annulations AS (
         SELECT 
-          EXTRACT(WEEK FROM generate_series) as semaine,
-          EXTRACT(YEAR FROM generate_series) as annee,
-          MIN(generate_series) as date_debut_semaine,
-          MAX(generate_series) as date_fin_semaine
-        FROM generate_series(
-          CURRENT_DATE,
-          CURRENT_DATE + INTERVAL '${periode} days',
-          '1 day'::interval
-        ) generate_series
-        GROUP BY EXTRACT(WEEK FROM generate_series), EXTRACT(YEAR FROM generate_series)
-      )
-      SELECT 
-        sf.semaine,
-        sf.annee,
-        TO_CHAR(sf.date_debut_semaine, 'DD/MM') || ' - ' || TO_CHAR(sf.date_fin_semaine, 'DD/MM') as periode_semaine,
-        
-        -- Réservations de la semaine
-        COUNT(r.numeroreservations) as reservations_confirmees,
-        COALESCE(SUM(r.tarif), 0) as revenu_attendu_semaine,
-        
-        -- Prévisions d'annulations basées sur l'historique
-        (
-          SELECT ROUND(AVG(annulations_semaine), 2)
-          FROM (
-            SELECT COUNT(*) as annulations_semaine
-            FROM reservation rh 
-            WHERE EXTRACT(WEEK FROM rh.datereservation) = sf.semaine
-            AND EXTRACT(YEAR FROM rh.datereservation) = sf.annee - 1
-            AND rh.statut = 'annulée'
-            GROUP BY EXTRACT(WEEK FROM rh.datereservation), EXTRACT(YEAR FROM rh.datereservation)
-          ) stats
-        ) as annulations_prevues_semaine,
-        
-        -- Taux d'annulation historique pour cette semaine
-        (
-          SELECT ROUND(
-            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-            NULLIF(COUNT(*), 0)
-            ), 2
-          )
-          FROM reservation rh 
-          WHERE EXTRACT(WEEK FROM rh.datereservation) = sf.semaine
-          AND EXTRACT(YEAR FROM rh.datereservation) = sf.annee - 1
-        ) as taux_annulation_historique_semaine
-
-      FROM semaines_futures sf
-      LEFT JOIN reservation r ON r.datereservation BETWEEN sf.date_debut_semaine AND sf.date_fin_semaine 
-        AND r.statut = 'confirmée'
-      GROUP BY sf.semaine, sf.annee, sf.date_debut_semaine, sf.date_fin_semaine
-      ORDER BY sf.annee, sf.semaine
-    `);
-
-    // 3. Prévisions mensuelles
-    const previsionsMensuelles = await db.query(`
-      WITH mois_futurs AS (
-        SELECT 
-          EXTRACT(MONTH FROM generate_series) as mois,
-          EXTRACT(YEAR FROM generate_series) as annee,
-          TO_CHAR(generate_series, 'Mon YYYY') as periode_mois
-        FROM generate_series(
-          CURRENT_DATE,
-          CURRENT_DATE + INTERVAL '${periode} days',
-          '1 month'::interval
-        ) generate_series
-        GROUP BY EXTRACT(MONTH FROM generate_series), EXTRACT(YEAR FROM generate_series), TO_CHAR(generate_series, 'Mon YYYY')
-      )
-      SELECT 
-        mf.mois,
-        mf.annee,
-        mf.periode_mois,
-        
-        -- Réservations du mois
-        COUNT(r.numeroreservations) as reservations_confirmees,
-        COALESCE(SUM(r.tarif), 0) as revenu_attendu_mois,
-        
-        -- Prévisions d'annulations basées sur l'historique
-        (
-          SELECT COUNT(*)
-          FROM reservation rh 
-          WHERE EXTRACT(MONTH FROM rh.datereservation) = mf.mois
-          AND EXTRACT(YEAR FROM rh.datereservation) = mf.annee - 1
-          AND rh.statut = 'annulée'
-        ) as annulations_prevues_mois,
-        
-        -- Taux d'annulation historique pour ce mois
-        (
-          SELECT ROUND(
-            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-            NULLIF(COUNT(*), 0)
-            ), 2
-          )
-          FROM reservation rh 
-          WHERE EXTRACT(MONTH FROM rh.datereservation) = mf.mois
-          AND EXTRACT(YEAR FROM rh.datereservation) = mf.annee - 1
-        ) as taux_annulation_historique_mois,
-        
-        -- Revenus à risque pour ce mois
-        COALESCE(SUM(r.tarif), 0) * 
-        COALESCE((
-          SELECT ROUND(
-            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-            NULLIF(COUNT(*), 0)
-            ), 2
-          ) / 100
-          FROM reservation rh 
-          WHERE EXTRACT(MONTH FROM rh.datereservation) = mf.mois
-          AND EXTRACT(YEAR FROM rh.datereservation) = mf.annee - 1
-        ), 0.1) as revenus_risque_mois
-
-      FROM mois_futurs mf
-      LEFT JOIN reservation r ON 
-        EXTRACT(MONTH FROM r.datereservation) = mf.mois 
-        AND EXTRACT(YEAR FROM r.datereservation) = mf.annee
-        AND r.statut = 'confirmée'
-      GROUP BY mf.mois, mf.annee, mf.periode_mois
-      ORDER BY mf.annee, mf.mois
-    `);
-
-    // 4. Statistiques globales de prévision
-    const statsGlobalesPrevisions = await db.query(`
-      WITH historique_recent AS (
-        SELECT 
-          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_90j,
-          COUNT(*) as total_reservations_90j,
-          ROUND(
-            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-            NULLIF(COUNT(*), 0)
-            ), 2
-          ) as taux_annulation_90j,
-          ROUND(AVG(annulations_jour), 2) as annulations_moyennes_jour
+          COUNT(*) as annulations_total,
+          ROUND(AVG(annulations_jour), 2) as annulations_moyennes_jour,
+          ROUND(AVG(taux_annulation_jour), 2) as taux_annulation_moyen
         FROM (
           SELECT 
             datereservation,
-            COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_jour
+            COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_jour,
+            COUNT(*) as total_jour,
+            ROUND(
+              (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
+              NULLIF(COUNT(*), 0)
+              ), 2
+            ) as taux_annulation_jour
           FROM reservation 
-          WHERE datereservation >= CURRENT_DATE - INTERVAL '90 days'
+          WHERE datereservation BETWEEN CURRENT_DATE - INTERVAL '60 days' AND CURRENT_DATE - INTERVAL '1 day'
           GROUP BY datereservation
         ) stats_jour
       ),
       reservations_futures AS (
         SELECT 
-          COUNT(*) as reservations_prevues_total,
-          COALESCE(SUM(tarif), 0) as revenus_prevus_total
+          COUNT(*) as reservations_prevues,
+          COALESCE(SUM(tarif), 0) as revenus_prevus
         FROM reservation 
         WHERE statut = 'confirmée'
           AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${periode} days'
       )
       SELECT 
-        hr.taux_annulation_90j as taux_annulation_moyen,
-        hr.annulations_moyennes_jour,
-        rf.reservations_prevues_total,
-        rf.revenus_prevus_total,
-        
-        -- Prévisions globales
-        ROUND(hr.annulations_moyennes_jour * ${periode}) as annulations_prevues_total,
-        ROUND(rf.revenus_prevus_total * (hr.taux_annulation_90j / 100)) as revenus_risque_total,
-        
-        -- Niveaux d'alerte
+        ha.annulations_moyennes_jour,
+        ha.taux_annulation_moyen,
+        rf.reservations_prevues,
+        rf.revenus_prevus,
+        -- Prévisions basées sur la moyenne historique
+        ROUND(ha.annulations_moyennes_jour * ${periode}) as annulations_prevues,
+        ROUND(rf.revenus_prevus * (ha.taux_annulation_moyen / 100)) as revenus_risque_perte,
+        -- Niveau d'alerte
         CASE 
-          WHEN hr.taux_annulation_90j > 20 THEN 'Élevé'
-          WHEN hr.taux_annulation_90j > 10 THEN 'Modéré'
+          WHEN ha.taux_annulation_moyen > 20 THEN 'Élevé'
+          WHEN ha.taux_annulation_moyen > 10 THEN 'Modéré'
           ELSE 'Faible'
-        END as niveau_risque_global,
-        
-        -- Jours à haut risque
-        (
-          SELECT COUNT(*)
-          FROM (
-            SELECT DISTINCT EXTRACT(DOW FROM datereservation) as jour_semaine
-            FROM reservation 
-            WHERE statut = 'annulée'
-            AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-            GROUP BY EXTRACT(DOW FROM datereservation)
-            HAVING COUNT(*) > (
-              SELECT AVG(annulations_jour_semaine)
-              FROM (
-                SELECT COUNT(*) as annulations_jour_semaine
-                FROM reservation 
-                WHERE statut = 'annulée'
-                AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-                GROUP BY EXTRACT(DOW FROM datereservation)
-              ) stats_jours
-            )
-          ) jours_risque
-        ) as jours_haut_risque_semaine
+        END as niveau_risque_annulations
+      FROM historique_annulations ha, reservations_futures rf
+    `);
 
-      FROM historique_recent hr, reservations_futures rf
+    // Analyse des patterns d'annulation récents
+    const patterns = await db.query(`
+      SELECT 
+        TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
+        COUNT(*) as annulations_ce_jour,
+        COALESCE(SUM(tarif), 0) as revenus_perdus
+      FROM reservation 
+      WHERE statut = 'annulée'
+        AND datereservation >= CURRENT_DATE - INTERVAL '14 days'
+      GROUP BY datereservation
+      ORDER BY datereservation DESC
     `);
 
     res.json({
       success: true,
       data: {
-        // Données détaillées par période
-        previsions_quotidiennes: previsionsQuotidiennes.rows,
-        previsions_hebdomadaires: previsionsHebdomadaires.rows,
-        previsions_mensuelles: previsionsMensuelles.rows,
-        
-        // Statistiques globales
-        statistiques_globales: statsGlobalesPrevisions.rows[0],
-        
-        // Métriques résumées pour le dashboard
-        resume_previsions: {
-          periode_jours: parseInt(periode),
-          reservations_prevues: statsGlobalesPrevisions.rows[0]?.reservations_prevues_total || 0,
-          annulations_prevues: statsGlobalesPrevisions.rows[0]?.annulations_prevues_total || 0,
-          revenus_prevus: statsGlobalesPrevisions.rows[0]?.revenus_prevus_total || 0,
-          revenus_risque: statsGlobalesPrevisions.rows[0]?.revenus_risque_total || 0,
-          taux_annulation_moyen: statsGlobalesPrevisions.rows[0]?.taux_annulation_moyen || 0,
-          niveau_risque: statsGlobalesPrevisions.rows[0]?.niveau_risque_global || 'Faible',
-          jours_analyse: previsionsQuotidiennes.rows.length,
-          semaines_analyse: previsionsHebdomadaires.rows.length,
-          mois_analyse: previsionsMensuelles.rows.length
-        },
-        
-        // Dernière mise à jour
-        derniere_maj: new Date().toISOString(),
+        previsions: result.rows[0],
+        patterns_recents: patterns.rows,
         periode_analyse: parseInt(periode)
       }
     });
@@ -673,153 +455,6 @@ router.get('/synthese-annulations', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
-      error: error.message
-    });
-  }
-});
-
-// 🔍 NOUVELLE ROUTE: Prévisions détaillées pour l'occupation (pour le composant React)
-router.get('/previsions/detaillees', async (req, res) => {
-  try {
-    const { jours = '14' } = req.query;
-    const joursInt = parseInt(jours);
-
-    console.log(`📊 Chargement des prévisions détaillées pour ${joursInt} jours...`);
-
-    const result = await db.query(`
-      WITH dates_futures AS (
-        SELECT 
-          generate_series(
-            CURRENT_DATE + INTERVAL '1 day',
-            CURRENT_DATE + INTERVAL '${joursInt} days',
-            '1 day'::interval
-          )::date as datereservation
-      ),
-      reservations_confirmees AS (
-        SELECT 
-          r.datereservation,
-          COUNT(r.numeroreservations) as nb_reservations,
-          COUNT(DISTINCT r.numeroterrain) as nb_terrains,
-          COALESCE(SUM(r.tarif), 0) as revenu_attendu,
-          STRING_AGG(DISTINCT r.typeterrain, ', ') as types_terrains
-        FROM reservation r
-        WHERE r.statut = 'confirmée'
-          AND r.datereservation BETWEEN CURRENT_DATE + INTERVAL '1 day' AND CURRENT_DATE + INTERVAL '${joursInt} days'
-        GROUP BY r.datereservation
-      ),
-      stats_terrains AS (
-        SELECT COUNT(DISTINCT numeroterrain) as total_terrains
-        FROM terrain
-        WHERE statut = 'actif'
-      )
-      SELECT 
-        df.datereservation,
-        TO_CHAR(df.datereservation, 'YYYY-MM-DD') as date_iso,
-        TO_CHAR(df.datereservation, 'DD/MM/YYYY') as date_formattee,
-        TO_CHAR(df.datereservation, 'Day') as jour_semaine,
-        EXTRACT(DOW FROM df.datereservation) as num_jour_semaine,
-        
-        COALESCE(rc.nb_reservations, 0) as nb_reservations,
-        COALESCE(rc.nb_terrains, 0) as nb_terrains,
-        COALESCE(rc.revenu_attendu, 0) as revenu_attendu,
-        COALESCE(rc.types_terrains, 'Aucune réservation') as types_terrains,
-        
-        -- Calcul du pourcentage d'occupation RÉEL
-        CASE 
-          WHEN COALESCE(rc.nb_terrains, 0) > 0 THEN
-            ROUND(
-              (COALESCE(rc.nb_reservations, 0) * 100.0 / 
-              (rc.nb_terrains * 8) -- 8 réservations max par terrain par jour
-              ), 1
-            )
-          ELSE 0
-        END as pourcentage_occupation,
-        
-        st.total_terrains as total_terrains_disponibles,
-        
-        -- Niveau d'occupation
-        CASE 
-          WHEN (COALESCE(rc.nb_reservations, 0) * 100.0 / NULLIF((rc.nb_terrains * 8), 0)) >= 80 THEN 'Élevée'
-          WHEN (COALESCE(rc.nb_reservations, 0) * 100.0 / NULLIF((rc.nb_terrains * 8), 0)) >= 60 THEN 'Moyenne+'
-          WHEN (COALESCE(rc.nb_reservations, 0) * 100.0 / NULLIF((rc.nb_terrains * 8), 0)) >= 40 THEN 'Moyenne'
-          ELSE 'Faible'
-        END as niveau_occupation,
-        
-        -- Prévisions d'annulations basées sur l'historique
-        (
-          SELECT ROUND(AVG(annulations_jour), 1)
-          FROM (
-            SELECT COUNT(*) as annulations_jour
-            FROM reservation rh 
-            WHERE EXTRACT(DOW FROM rh.datereservation) = EXTRACT(DOW FROM df.datereservation)
-            AND rh.statut = 'annulée'
-            AND rh.datereservation >= CURRENT_DATE - INTERVAL '60 days'
-            GROUP BY rh.datereservation
-          ) stats
-        ) as annulations_prevues
-
-      FROM dates_futures df
-      LEFT JOIN reservations_confirmees rc ON rc.datereservation = df.datereservation
-      CROSS JOIN stats_terrains st
-      ORDER BY df.datereservation ASC
-    `);
-
-    // Statistiques globales pour la période
-    const statsGlobales = await db.query(`
-      SELECT 
-        COUNT(*) as total_jours_analyse,
-        SUM(nb_reservations) as total_reservations_prevues,
-        SUM(revenu_attendu) as total_revenu_prevue,
-        ROUND(AVG(pourcentage_occupation), 1) as occupation_moyenne_prevue,
-        COUNT(CASE WHEN niveau_occupation = 'Élevée' THEN 1 END) as jours_forte_occupation,
-        COUNT(CASE WHEN niveau_occupation = 'Faible' THEN 1 END) as jours_faible_occupation
-      FROM (
-        SELECT 
-          COALESCE(rc.nb_reservations, 0) as nb_reservations,
-          COALESCE(rc.revenu_attendu, 0) as revenu_attendu,
-          CASE 
-            WHEN COALESCE(rc.nb_terrains, 0) > 0 THEN
-              ROUND(
-                (COALESCE(rc.nb_reservations, 0) * 100.0 / 
-                (rc.nb_terrains * 8)
-                ), 1
-              )
-            ELSE 0
-          END as pourcentage_occupation,
-          CASE 
-            WHEN (COALESCE(rc.nb_reservations, 0) * 100.0 / NULLIF((rc.nb_terrains * 8), 0)) >= 80 THEN 'Élevée'
-            WHEN (COALESCE(rc.nb_reservations, 0) * 100.0 / NULLIF((rc.nb_terrains * 8), 0)) >= 60 THEN 'Moyenne+'
-            WHEN (COALESCE(rc.nb_reservations, 0) * 100.0 / NULLIF((rc.nb_terrains * 8), 0)) >= 40 THEN 'Moyenne'
-            ELSE 'Faible'
-          END as niveau_occupation
-        FROM generate_series(
-          CURRENT_DATE + INTERVAL '1 day',
-          CURRENT_DATE + INTERVAL '${joursInt} days',
-          '1 day'::interval
-        )::date as date_futur
-        LEFT JOIN reservation rc ON rc.datereservation = date_futur AND rc.statut = 'confirmée'
-      ) previsions
-    `);
-
-    console.log(`✅ ${result.rows.length} jours de prévisions chargés`);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      statistiques: statsGlobales.rows[0],
-      metadata: {
-        periode_jours: joursInt,
-        date_debut: result.rows[0]?.date_formattee,
-        date_fin: result.rows[result.rows.length - 1]?.date_formattee,
-        derniere_maj: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur prévisions détaillées:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors du chargement des prévisions',
       error: error.message
     });
   }
