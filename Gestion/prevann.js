@@ -276,58 +276,91 @@ router.get('/analyse-temporelle-annulations', async (req, res) => {
   }
 });
 
-// 🔮 Prévisions des annulations futures
+// 🔮 Prévisions des annulations futures AVEC DÉTAILS PAR JOUR
 router.get('/previsions-annulations', async (req, res) => {
   try {
     const { periode = '30' } = req.query;
     
-    const result = await db.query(`
-      WITH historique_annulations AS (
-        SELECT 
-          COUNT(*) as annulations_total,
-          ROUND(AVG(annulations_jour), 2) as annulations_moyennes_jour,
-          ROUND(AVG(taux_annulation_jour), 2) as taux_annulation_moyen
-        FROM (
-          SELECT 
-            datereservation,
-            COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_jour,
-            COUNT(*) as total_jour,
-            ROUND(
-              (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-              NULLIF(COUNT(*), 0)
-              ), 2
-            ) as taux_annulation_jour
-          FROM reservation 
-          WHERE datereservation BETWEEN CURRENT_DATE - INTERVAL '60 days' AND CURRENT_DATE - INTERVAL '1 day'
-          GROUP BY datereservation
-        ) stats_jour
-      ),
-      reservations_futures AS (
-        SELECT 
-          COUNT(*) as reservations_prevues,
-          COALESCE(SUM(tarif), 0) as revenus_prevus
-        FROM reservation 
-        WHERE statut = 'confirmée'
-          AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${periode} days'
-      )
+    // 1. Obtenir les statistiques historiques par jour de la semaine
+    const historiqueParJour = await db.query(`
       SELECT 
-        ha.annulations_moyennes_jour,
-        ha.taux_annulation_moyen,
-        rf.reservations_prevues,
-        rf.revenus_prevus,
-        -- Prévisions basées sur la moyenne historique
-        ROUND(ha.annulations_moyennes_jour * ${periode}) as annulations_prevues,
-        ROUND(rf.revenus_prevus * (ha.taux_annulation_moyen / 100)) as revenus_risque_perte,
-        -- Niveau d'alerte
-        CASE 
-          WHEN ha.taux_annulation_moyen > 20 THEN 'Élevé'
-          WHEN ha.taux_annulation_moyen > 10 THEN 'Modéré'
-          ELSE 'Faible'
-        END as niveau_risque_annulations
-      FROM historique_annulations ha, reservations_futures rf
+        EXTRACT(DOW FROM datereservation) as jour_semaine,
+        TO_CHAR(datereservation, 'Day') as nom_jour,
+        COUNT(*) as total_reservations_historique,
+        COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_historique,
+        COALESCE(SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END), 0) as revenus_perdus_historique,
+        ROUND(
+          (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
+          NULLIF(COUNT(*), 0)
+          ), 2
+        ) as taux_annulation_historique
+      FROM reservation 
+      WHERE datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE - INTERVAL '1 day'
+      GROUP BY EXTRACT(DOW FROM datereservation), TO_CHAR(datereservation, 'Day')
+      ORDER BY jour_semaine
     `);
 
-    // Analyse des patterns d'annulation récents
+    // 2. Obtenir les réservations confirmées futures par jour
+    const reservationsFutures = await db.query(`
+      SELECT 
+        datereservation,
+        TO_CHAR(datereservation, 'Day') as jour_semaine,
+        EXTRACT(DOW FROM datereservation) as num_jour_semaine,
+        COUNT(*) as reservations_prevues,
+        COALESCE(SUM(tarif), 0) as revenus_prevus
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${periode} days'
+      GROUP BY datereservation
+      ORDER BY datereservation ASC
+    `);
+
+    // 3. Calculer les prévisions par jour
+    const previsionsParJour = reservationsFutures.rows.map(jour => {
+      const statsJour = historiqueParJour.rows.find(
+        stat => stat.jour_semaine === jour.num_jour_semaine
+      );
+      
+      const tauxAnnulationMoyen = statsJour ? parseFloat(statsJour.taux_annulation_historique) : 10.0; // Valeur par défaut 10%
+      const annulationsPrevues = Math.round(jour.reservations_prevues * (tauxAnnulationMoyen / 100));
+      const revenusRisquePerte = Math.round(jour.revenus_prevus * (tauxAnnulationMoyen / 100));
+      
+      return {
+        date: jour.datereservation,
+        jour_semaine: jour.jour_semaine.trim(),
+        reservations_prevues: parseInt(jour.reservations_prevues),
+        revenus_prevus: parseFloat(jour.revenus_prevus),
+        taux_annulation_historique: tauxAnnulationMoyen,
+        annulations_prevues: annulationsPrevues,
+        revenus_risque_perte: revenusRisquePerte,
+        niveau_risque: getNiveauRisque(tauxAnnulationMoyen)
+      };
+    });
+
+    // 4. Statistiques globales des prévisions
+    const statsGlobalesPrevisions = previsionsParJour.reduce((acc, jour) => ({
+      reservations_prevues_total: acc.reservations_prevues_total + jour.reservations_prevues,
+      revenus_prevus_total: acc.revenus_prevus_total + jour.revenus_prevus,
+      annulations_prevues_total: acc.annulations_prevues_total + jour.annulations_prevues,
+      revenus_risque_total: acc.revenus_risque_total + jour.revenus_risque_perte
+    }), {
+      reservations_prevues_total: 0,
+      revenus_prevus_total: 0,
+      annulations_prevues_total: 0,
+      revenus_risque_total: 0
+    });
+
+    // 5. Taux d'annulation moyen prévu
+    const tauxAnnulationMoyenPrevu = statsGlobalesPrevisions.reservations_prevues_total > 0 
+      ? (statsGlobalesPrevisions.annulations_prevues_total / statsGlobalesPrevisions.reservations_prevues_total) * 100
+      : 0;
+
+    // 6. Jours à haut risque
+    const joursHautRisque = previsionsParJour
+      .filter(jour => jour.niveau_risque === 'Élevé')
+      .sort((a, b) => b.annulations_prevues - a.annulations_prevues);
+
+    // 7. Analyse des patterns d'annulation récents
     const patterns = await db.query(`
       SELECT 
         TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
@@ -343,13 +376,133 @@ router.get('/previsions-annulations', async (req, res) => {
     res.json({
       success: true,
       data: {
-        previsions: result.rows[0],
+        previsions_globales: {
+          ...statsGlobalesPrevisions,
+          taux_annulation_moyen_prevu: Math.round(tauxAnnulationMoyenPrevu * 100) / 100,
+          periode_analyse: parseInt(periode),
+          niveau_risque_global: getNiveauRisque(tauxAnnulationMoyenPrevu)
+        },
+        previsions_par_jour: previsionsParJour,
+        jours_haut_risque: joursHautRisque.slice(0, 5), // Top 5 jours à haut risque
+        statistiques_historiques: historiqueParJour.rows,
         patterns_recents: patterns.rows,
-        periode_analyse: parseInt(periode)
+        resume_hebdomadaire: calculerResumeHebdomadaire(previsionsParJour)
       }
     });
   } catch (error) {
     console.error('❌ Erreur prévisions annulations:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 🔮 NOUVELLE ROUTE : Prévisions détaillées par jour
+router.get('/previsions-journalieres', async (req, res) => {
+  try {
+    const { jours = '14' } = req.query;
+    
+    // 1. Historique des taux d'annulation par jour de la semaine
+    const historiqueTaux = await db.query(`
+      SELECT 
+        EXTRACT(DOW FROM datereservation) as jour_semaine,
+        TO_CHAR(datereservation, 'Day') as nom_jour,
+        ROUND(
+          (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
+          NULLIF(COUNT(*), 0)
+          ), 2
+        ) as taux_annulation_moyen,
+        COUNT(*) as echantillon_reservations
+      FROM reservation 
+      WHERE datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE - INTERVAL '1 day'
+      GROUP BY EXTRACT(DOW FROM datereservation), TO_CHAR(datereservation, 'Day')
+      ORDER BY jour_semaine
+    `);
+
+    // 2. Réservations futures groupées par jour
+    const reservationsParJour = await db.query(`
+      SELECT 
+        datereservation,
+        TO_CHAR(datereservation, 'DD/MM/YYYY') as date_formattee,
+        TO_CHAR(datereservation, 'Day') as jour_semaine,
+        EXTRACT(DOW FROM datereservation) as num_jour_semaine,
+        COUNT(*) as nb_reservations,
+        COUNT(DISTINCT numeroterrain) as terrains_occupes,
+        COALESCE(SUM(tarif), 0) as revenus_prevus,
+        ROUND(AVG(tarif), 2) as tarif_moyen
+      FROM reservation 
+      WHERE statut = 'confirmée'
+        AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${jours} days'
+      GROUP BY datereservation
+      ORDER BY datereservation ASC
+    `);
+
+    // 3. Calcul des prévisions détaillées par jour
+    const previsionsDetaillees = reservationsParJour.rows.map(jour => {
+      const statsJour = historiqueTaux.rows.find(
+        stat => stat.jour_semaine === jour.num_jour_semaine
+      );
+      
+      const tauxAnnulation = statsJour ? parseFloat(statsJour.taux_annulation_moyen) : 10.0;
+      const annulationsPrevues = Math.ceil(jour.nb_reservations * (tauxAnnulation / 100));
+      const revenusRisque = Math.round(jour.revenus_prevus * (tauxAnnulation / 100));
+      
+      return {
+        date: jour.datereservation,
+        date_affichage: jour.date_formattee,
+        jour_semaine: jour.jour_semaine.trim(),
+        reservations_prevues: parseInt(jour.nb_reservations),
+        terrains_occupes: parseInt(jour.terrains_occupes),
+        revenus_prevus: parseFloat(jour.revenus_prevus),
+        tarif_moyen: parseFloat(jour.tarif_moyen),
+        taux_annulation_historique: tauxAnnulation,
+        annulations_prevues: annulationsPrevues,
+        revenus_risque_perte: revenusRisque,
+        revenus_prevus_apres_annulation: parseFloat(jour.revenus_prevus) - revenusRisque,
+        niveau_risque: getNiveauRisque(tauxAnnulation),
+        confiance_prevision: Math.min(100, Math.max(50, statsJour ? statsJour.echantillon_reservations : 0))
+      };
+    });
+
+    // 4. Métriques globales
+    const metriquesGlobales = previsionsDetaillees.reduce((acc, jour) => ({
+      total_reservations: acc.total_reservations + jour.reservations_prevues,
+      total_revenus_prevus: acc.total_revenus_prevus + jour.revenus_prevus,
+      total_annulations_prevues: acc.total_annulations_prevues + jour.annulations_prevues,
+      total_revenus_risque: acc.total_revenus_risque + jour.revenus_risque_perte
+    }), {
+      total_reservations: 0,
+      total_revenus_prevus: 0,
+      total_annulations_prevues: 0,
+      total_revenus_risque: 0
+    });
+
+    metriquesGlobales.taux_annulation_moyen = metriquesGlobales.total_reservations > 0 
+      ? Math.round((metriquesGlobales.total_annulations_prevues / metriquesGlobales.total_reservations) * 100 * 100) / 100
+      : 0;
+
+    metriquesGlobales.revenus_prevus_net = metriquesGlobales.total_revenus_prevus - metriquesGlobales.total_revenus_risque;
+
+    res.json({
+      success: true,
+      data: {
+        periode_analyse: parseInt(jours),
+        metriques_globales: metriquesGlobales,
+        previsions_journalieres: previsionsDetaillees,
+        jours_critiques: previsionsDetaillees
+          .filter(j => j.niveau_risque === 'Élevé')
+          .sort((a, b) => b.revenus_risque_perte - a.revenus_risque_perte),
+        meilleurs_jours: previsionsDetaillees
+          .filter(j => j.niveau_risque === 'Faible')
+          .sort((a, b) => b.revenus_prevus_apres_annulation - a.revenus_prevus_apres_annulation)
+      },
+      last_updated: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur prévisions journalières:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -500,6 +653,43 @@ async function calculateAnnulationTrends(currentStats) {
 function calculatePercentageChange(current, previous) {
   if (previous === 0) return current === 0 ? 0 : 100;
   return Math.round(((current - previous) / previous) * 100);
+}
+
+// Fonction pour déterminer le niveau de risque
+function getNiveauRisque(tauxAnnulation) {
+  if (tauxAnnulation > 20) return 'Élevé';
+  if (tauxAnnulation > 10) return 'Modéré';
+  return 'Faible';
+}
+
+// Fonction pour calculer le résumé hebdomadaire
+function calculerResumeHebdomadaire(previsionsParJour) {
+  const resume = {};
+  
+  previsionsParJour.forEach(jour => {
+    if (!resume[jour.jour_semaine]) {
+      resume[jour.jour_semaine] = {
+        reservations_prevues: 0,
+        annulations_prevues: 0,
+        revenus_risque_perte: 0,
+        nombre_jours: 0
+      };
+    }
+    
+    resume[jour.jour_semaine].reservations_prevues += jour.reservations_prevues;
+    resume[jour.jour_semaine].annulations_prevues += jour.annulations_prevues;
+    resume[jour.jour_semaine].revenus_risque_perte += jour.revenus_risque_perte;
+    resume[jour.jour_semaine].nombre_jours += 1;
+  });
+  
+  // Convertir en tableau et calculer les moyennes
+  return Object.entries(resume).map(([jour, stats]) => ({
+    jour_semaine: jour,
+    reservations_prevues_moyennes: Math.round(stats.reservations_prevues / stats.nombre_jours),
+    annulations_prevues_moyennes: Math.round(stats.annulations_prevues / stats.nombre_jours),
+    revenus_risque_moyens: Math.round(stats.revenus_risque_perte / stats.nombre_jours),
+    taux_annulation_moyen: Math.round((stats.annulations_prevues / stats.reservations_prevues) * 100 * 100) / 100
+  })).sort((a, b) => b.taux_annulation_moyen - a.taux_annulation_moyen);
 }
 
 export default router;
