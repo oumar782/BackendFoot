@@ -59,7 +59,7 @@ app.use('/api/gestioncreneaux', creneauxRoute);
 app.use('/api/demonstration', demo);
 app.use('/api/prevision', prev);
 app.use('/api/calendriers', CalendriersRouter);
-app.use('/api/prevannulé', Prevan);
+app.use('/api/prevannule', Prevan);
 
 // 🏥 Health check endpoint amélioré
 app.get('/api/health', async (req, res) => {
