@@ -11,11 +11,11 @@ router.get('/dashboard-annulations', async (req, res) => {
     const [
       annulationsMois,
       revenusPerdusMois,
-      tauxAnnulationMois,
-      annulationsSemaine,
-      motifsAnnulation,
+      terrainsAffectes,
+      tauxAnnulation,
       statsTempsReel,
-      evolutionAnnulations
+      annulationsAnnee,
+      motifsAnnulation
     ] = await Promise.all([
       // Annulations du mois actuel
       db.query(`
@@ -35,6 +35,14 @@ router.get('/dashboard-annulations', async (req, res) => {
         AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
       `),
       
+      // Terrains les plus affectés par les annulations
+      db.query(`
+        SELECT COUNT(DISTINCT numeroterrain) as terrains_affectes
+        FROM reservation 
+        WHERE statut = 'annulée'
+        AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
+      `),
+      
       // Taux d'annulation du mois
       db.query(`
         SELECT 
@@ -42,20 +50,27 @@ router.get('/dashboard-annulations', async (req, res) => {
             (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
             NULLIF(COUNT(*), 0)
             ), 2
-          ) as taux_annulation_mois
+          ) as taux_annulation
         FROM reservation 
         WHERE EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
         AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
       `),
       
-      // Annulations de la semaine (7 derniers jours)
+      // Statistiques temps réel des annulations
       db.query(`
         SELECT 
-          COUNT(*) as annulations_semaine,
-          COUNT(DISTINCT DATE(datereservation)) as jours_avec_annulations
+          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'annulée' THEN 1 END) as annulations_aujourdhui,
+          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'confirmée' THEN 1 END) as confirmes_aujourdhui,
+          COUNT(CASE WHEN datereservation = CURRENT_DATE THEN 1 END) as total_aujourdhui
+        FROM reservation
+      `),
+      
+      // Annulations de l'année
+      db.query(`
+        SELECT COUNT(*) as annulations_annee
         FROM reservation 
         WHERE statut = 'annulée'
-        AND datereservation >= CURRENT_DATE - INTERVAL '7 days'
+        AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
       `),
       
       // Motifs d'annulation les plus fréquents
@@ -69,59 +84,36 @@ router.get('/dashboard-annulations', async (req, res) => {
         AND motif_annulation IS NOT NULL
         GROUP BY motif_annulation
         ORDER BY nombre_annulations DESC
-        LIMIT 10
-      `),
-      
-      // Statistiques temps réel des annulations
-      db.query(`
-        SELECT 
-          COUNT(CASE WHEN datereservation = CURRENT_DATE AND statut = 'annulée' THEN 1 END) as annulations_aujourdhui,
-          COUNT(CASE WHEN datereservation = CURRENT_DATE - INTERVAL '1 day' AND statut = 'annulée' THEN 1 END) as annulations_hier,
-          COUNT(CASE WHEN statut = 'annulée' AND datereservation >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as annulations_7jours
-        FROM reservation
-      `),
-      
-      // Évolution des annulations sur 6 mois
-      db.query(`
-        SELECT 
-          EXTRACT(MONTH FROM datereservation) as mois,
-          EXTRACT(YEAR FROM datereservation) as annee,
-          COUNT(*) as annulations_mois
-        FROM reservation 
-        WHERE statut = 'annulée'
-        AND datereservation >= CURRENT_DATE - INTERVAL '6 months'
-        GROUP BY EXTRACT(YEAR FROM datereservation), EXTRACT(MONTH FROM datereservation)
-        ORDER BY annee, mois
+        LIMIT 5
       `)
     ]);
 
     const stats = {
       annulations_mois: parseInt(annulationsMois.rows[0]?.annulations_mois || 0),
       revenus_perdus_mois: parseFloat(revenusPerdusMois.rows[0]?.revenus_perdus_mois || 0),
-      taux_annulation_mois: parseFloat(tauxAnnulationMois.rows[0]?.taux_annulation_mois || 0),
-      annulations_semaine: parseInt(annulationsSemaine.rows[0]?.annulations_semaine || 0),
-      jours_avec_annulations: parseInt(annulationsSemaine.rows[0]?.jours_avec_annulations || 0),
+      terrains_affectes: parseInt(terrainsAffectes.rows[0]?.terrains_affectes || 0),
+      taux_annulation: parseFloat(tauxAnnulation.rows[0]?.taux_annulation || 0),
       annulations_aujourdhui: parseInt(statsTempsReel.rows[0]?.annulations_aujourdhui || 0),
-      annulations_hier: parseInt(statsTempsReel.rows[0]?.annulations_hier || 0),
-      annulations_7jours: parseInt(statsTempsReel.rows[0]?.annulations_7jours || 0),
-      motifs_annulation: motifsAnnulation.rows,
-      evolution_annulations: evolutionAnnulations.rows
+      confirmes_aujourdhui: parseInt(statsTempsReel.rows[0]?.confirmes_aujourdhui || 0),
+      total_aujourdhui: parseInt(statsTempsReel.rows[0]?.total_aujourdhui || 0),
+      annulations_annee: parseInt(annulationsAnnee.rows[0]?.annulations_annee || 0),
+      motifs_annulation: motifsAnnulation.rows
     };
 
-    // Calcul des trends et alertes
-    const analysis = await analyzeCancellationPatterns(stats);
+    // Calcul des trends pour les annulations
+    const trends = await calculateTrendsAnnulations(stats);
 
     res.json({
       success: true,
       data: {
         ...stats,
-        analysis
+        trends
       },
       last_updated: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('❌ Erreur statistiques annulations:', error);
+    console.error('❌ Erreur statistiques annulations dashboard:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -130,7 +122,7 @@ router.get('/dashboard-annulations', async (req, res) => {
   }
 });
 
-// 📈 Évolution détaillée des annulations sur 12 mois
+// 📈 Évolution des annulations sur 12 mois
 router.get('/evolution-annulations', async (req, res) => {
   try {
     const result = await db.query(`
@@ -144,21 +136,18 @@ router.get('/evolution-annulations', async (req, res) => {
       SELECT 
         TO_CHAR(ms.mois, 'YYYY-MM') as periode,
         TO_CHAR(ms.mois, 'Mon YYYY') as periode_affichage,
-        COALESCE(COUNT(r.numeroreservations), 0) as annulations,
+        COUNT(r.numeroreservations) as annulations,
         COALESCE(SUM(r.tarif), 0) as revenus_perdus,
+        COUNT(CASE WHEN r.statut = 'confirmée' THEN 1 END) as reservations_confirmees,
         ROUND(
-          (COUNT(r.numeroreservations) * 100.0 / NULLIF(
-            (SELECT COUNT(*) FROM reservation r2 
-             WHERE EXTRACT(YEAR FROM r2.datereservation) = EXTRACT(YEAR FROM ms.mois)
-             AND EXTRACT(MONTH FROM r2.datereservation) = EXTRACT(MONTH FROM ms.mois)), 0)
+          (COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) * 100.0 / 
+          NULLIF(COUNT(r.numeroreservations), 0)
           ), 2
-        ) as taux_annulation_mois,
-        COUNT(DISTINCT r.numeroterrain) as terrains_affectes
+        ) as taux_annulation_mensuel
       FROM mois_series ms
       LEFT JOIN reservation r ON 
         EXTRACT(YEAR FROM r.datereservation) = EXTRACT(YEAR FROM ms.mois)
         AND EXTRACT(MONTH FROM r.datereservation) = EXTRACT(MONTH FROM ms.mois)
-        AND r.statut = 'annulée'
       GROUP BY ms.mois
       ORDER BY ms.mois ASC
     `);
@@ -177,8 +166,8 @@ router.get('/evolution-annulations', async (req, res) => {
   }
 });
 
-// 🎯 Analyse des terrains les plus affectés par les annulations
-router.get('/terrains-annulations', async (req, res) => {
+// 🎯 Analyse détaillée des annulations par terrain
+router.get('/analyse-annulations-terrains', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
@@ -188,15 +177,22 @@ router.get('/terrains-annulations', async (req, res) => {
         COUNT(*) as total_annulations,
         COALESCE(SUM(tarif), 0) as revenus_perdus,
         ROUND(AVG(tarif), 2) as perte_moyenne,
+        COUNT(DISTINCT EXTRACT(MONTH FROM datereservation)) as mois_affectes,
         ROUND(
-          (COUNT(*) * 100.0 / NULLIF(
-            (SELECT COUNT(*) FROM reservation r2 
-             WHERE r2.numeroterrain = reservation.numeroterrain 
-             AND r2.datereservation >= CURRENT_DATE - INTERVAL '90 days'), 0)
+          (COUNT(*) * 100.0 / 
+          (SELECT COUNT(*) FROM reservation WHERE statut = 'annulée' AND datereservation >= CURRENT_DATE - INTERVAL '90 days')
           ), 2
-        ) as taux_annulation_terrain,
-        MIN(datereservation) as premiere_annulation,
-        MAX(datereservation) as derniere_annulation
+        ) as part_annulations_total,
+        -- Taux d'annulation spécifique au terrain
+        ROUND(
+          (COUNT(*) * 100.0 / NULLIF((
+            SELECT COUNT(*) 
+            FROM reservation r2 
+            WHERE r2.numeroterrain = reservation.numeroterrain 
+            AND r2.datereservation >= CURRENT_DATE - INTERVAL '90 days'
+          ), 0)
+          ), 2
+        ) as taux_annulation_terrain
       FROM reservation 
       WHERE statut = 'annulée'
         AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
@@ -209,7 +205,7 @@ router.get('/terrains-annulations', async (req, res) => {
       data: result.rows
     });
   } catch (error) {
-    console.error('❌ Erreur analyse terrains annulations:', error);
+    console.error('❌ Erreur analyse annulations terrains:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -219,84 +215,61 @@ router.get('/terrains-annulations', async (req, res) => {
 });
 
 // 📅 Analyse temporelle des annulations
-router.get('/analyse-temporelle', async (req, res) => {
+router.get('/analyse-temporelle-annulations', async (req, res) => {
   try {
-    const [
-      annulationsParJour,
-      annulationsParMois,
-      annulationsParHeure,
-      annulationsParJourSemaine
-    ] = await Promise.all([
-      // Annulations par jour de la semaine
-      db.query(`
+    const { periode = '30' } = req.query;
+    
+    const result = await db.query(`
+      WITH stats_jour_semaine AS (
         SELECT 
           EXTRACT(DOW FROM datereservation) as jour_semaine,
           TO_CHAR(datereservation, 'Day') as nom_jour,
-          COUNT(*) as nombre_annulations,
+          COUNT(*) as annulations,
+          COALESCE(SUM(tarif), 0) as revenus_perdus,
           ROUND(AVG(tarif), 2) as perte_moyenne
         FROM reservation 
         WHERE statut = 'annulée'
-        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
+          AND datereservation >= CURRENT_DATE - INTERVAL '${periode} days'
         GROUP BY EXTRACT(DOW FROM datereservation), TO_CHAR(datereservation, 'Day')
         ORDER BY jour_semaine
-      `),
-      
-      // Annulations par mois
-      db.query(`
+      ),
+      stats_heure AS (
+        SELECT 
+          EXTRACT(HOUR FROM heuredebut) as heure_jour,
+          COUNT(*) as annulations,
+          ROUND((COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM reservation WHERE statut = 'annulée'), 0)), 2) as pourcentage
+        FROM reservation 
+        WHERE statut = 'annulée'
+          AND datereservation >= CURRENT_DATE - INTERVAL '${periode} days'
+          AND heuredebut IS NOT NULL
+        GROUP BY EXTRACT(HOUR FROM heuredebut)
+        ORDER BY heure_jour
+      ),
+      stats_mois AS (
         SELECT 
           EXTRACT(MONTH FROM datereservation) as mois,
           TO_CHAR(datereservation, 'Month') as nom_mois,
-          COUNT(*) as nombre_annulations,
-          ROUND(AVG(tarif), 2) as perte_moyenne
+          COUNT(*) as annulations,
+          COALESCE(SUM(tarif), 0) as revenus_perdus
         FROM reservation 
         WHERE statut = 'annulée'
-        AND datereservation >= CURRENT_DATE - INTERVAL '365 days'
+          AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE)
         GROUP BY EXTRACT(MONTH FROM datereservation), TO_CHAR(datereservation, 'Month')
         ORDER BY mois
-      `),
-      
-      // Annulations par heure de la journée
-      db.query(`
-        SELECT 
-          EXTRACT(HOUR FROM heure_reservation) as heure,
-          COUNT(*) as nombre_annulations,
-          ROUND(AVG(tarif), 2) as perte_moyenne
-        FROM reservation 
-        WHERE statut = 'annulée'
-        AND heure_reservation IS NOT NULL
-        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-        GROUP BY EXTRACT(HOUR FROM heure_reservation)
-        ORDER BY heure
-      `),
-      
-      // Tendances par jour de la semaine
-      db.query(`
-        SELECT 
-          TO_CHAR(datereservation, 'Day') as jour_semaine,
-          COUNT(*) as total_reservations,
-          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations,
-          ROUND(
-            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0)
-            ), 2
-          ) as taux_annulation
-        FROM reservation 
-        WHERE datereservation >= CURRENT_DATE - INTERVAL '90 days'
-        GROUP BY TO_CHAR(datereservation, 'Day'), EXTRACT(DOW FROM datereservation)
-        ORDER BY EXTRACT(DOW FROM datereservation)
-      `)
-    ]);
+      )
+      SELECT 
+        (SELECT json_agg(row_to_json(stats_jour_semaine)) FROM stats_jour_semaine) as par_jour_semaine,
+        (SELECT json_agg(row_to_json(stats_heure)) FROM stats_heure) as par_heure,
+        (SELECT json_agg(row_to_json(stats_mois)) FROM stats_mois) as par_mois
+    `);
 
     res.json({
       success: true,
-      data: {
-        par_jour_semaine: annulationsParJour.rows,
-        par_mois: annulationsParMois.rows,
-        par_heure: annulationsParHeure.rows,
-        tendances_jour_semaine: annulationsParJourSemaine.rows
-      }
+      data: result.rows[0],
+      periode_analyse: parseInt(periode)
     });
   } catch (error) {
-    console.error('❌ Erreur analyse temporelle:', error);
+    console.error('❌ Erreur analyse temporelle annulations:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -305,123 +278,118 @@ router.get('/analyse-temporelle', async (req, res) => {
   }
 });
 
-// 🔮 Prévisions des annulations futures
+// 🔍 Détails des motifs d'annulation
+router.get('/motifs-annulation', async (req, res) => {
+  try {
+    const { limit = 20 } = req.query;
+    
+    const result = await db.query(`
+      SELECT 
+        motif_annulation,
+        COUNT(*) as nombre_annulations,
+        COALESCE(SUM(tarif), 0) as revenus_perdus,
+        ROUND(AVG(tarif), 2) as perte_moyenne,
+        MIN(datereservation) as premiere_annulation,
+        MAX(datereservation) as derniere_annulation,
+        COUNT(DISTINCT numeroterrain) as terrains_affectes,
+        ROUND((COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM reservation WHERE statut = 'annulée'), 0)), 2) as pourcentage_total
+      FROM reservation 
+      WHERE statut = 'annulée'
+      GROUP BY motif_annulation
+      ORDER BY nombre_annulations DESC
+      LIMIT $1
+    `, [limit]);
+
+    // Statistiques supplémentaires sur les motifs
+    const statsMotifs = await db.query(`
+      SELECT 
+        COUNT(DISTINCT motif_annulation) as total_motifs_différents,
+        COUNT(CASE WHEN motif_annulation IS NULL THEN 1 END) as annulations_sans_motif,
+        ROUND(AVG(CASE WHEN motif_annulation IS NOT NULL THEN 1 ELSE 0 END * 100.0), 2) as taux_remplissage_motif
+      FROM reservation 
+      WHERE statut = 'annulée'
+    `);
+
+    res.json({
+      success: true,
+      data: {
+        motifs: result.rows,
+        statistiques: statsMotifs.rows[0]
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur motifs annulation:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📊 Prévisions d'annulations
 router.get('/previsions-annulations', async (req, res) => {
   try {
     const { periode = '30' } = req.query;
     
     const result = await db.query(`
       WITH historique_annulations AS (
-        -- Analyse des patterns historiques d'annulation
         SELECT 
-          COUNT(*) as annulations_total,
-          ROUND(AVG(tarif), 2) as perte_moyenne,
-          COUNT(DISTINCT numeroterrain) as terrains_affectes,
-          ROUND(
-            (COUNT(*) * 100.0 / NULLIF(
-              (SELECT COUNT(*) FROM reservation 
-               WHERE datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE), 0)
-            ), 2
-          ) as taux_annulation_historique
+          datereservation,
+          COUNT(*) as annulations_jour,
+          COALESCE(SUM(tarif), 0) as pertes_jour
         FROM reservation 
         WHERE statut = 'annulée'
-        AND datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE
+          AND datereservation BETWEEN CURRENT_DATE - INTERVAL '60 days' AND CURRENT_DATE - INTERVAL '1 day'
+        GROUP BY datereservation
       ),
-      reservations_futures AS (
-        -- Réservations futures avec risque d'annulation
+      tendances AS (
         SELECT 
-          numeroreservations,
-          numeroterrain,
-          datereservation,
-          tarif,
-          -- Calcul du score de risque basé sur l'historique du terrain
-          (
-            SELECT COUNT(*) * 1.0 / NULLIF(
-              (SELECT COUNT(*) FROM reservation r2 
-               WHERE r2.numeroterrain = r.numeroterrain 
-               AND r2.datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE), 1
-            )
-            FROM reservation r3 
-            WHERE r3.numeroterrain = r.numeroterrain 
-            AND r3.statut = 'annulée'
-            AND r3.datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE
-          ) as score_risque,
-          -- Jour de la semaine
-          EXTRACT(DOW FROM datereservation) as jour_semaine
-        FROM reservation r
-        WHERE statut = 'confirmée'
-          AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${periode} days'
+          ROUND(AVG(annulations_jour), 2) as annulations_moyennes_par_jour,
+          ROUND(AVG(pertes_jour), 2) as pertes_moyennes_par_jour,
+          ROUND(STDDEV(annulations_jour), 2) as ecart_type_annulations,
+          MAX(annulations_jour) as annulations_max_jour,
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY annulations_jour) as annulations_seuil_alerte
+        FROM historique_annulations
       ),
       predictions AS (
         SELECT 
-          rf.*,
-          CASE 
-            WHEN rf.score_risque > 0.3 THEN 'Élevé'
-            WHEN rf.score_risque > 0.1 THEN 'Moyen'
-            ELSE 'Faible'
-          END as niveau_risque,
-          ha.taux_annulation_historique,
-          ha.perte_moyenne
-        FROM reservations_futures rf
-        CROSS JOIN historique_annulations ha
-        WHERE rf.score_risque IS NOT NULL
+          CURRENT_DATE + (n || ' days')::INTERVAL as date_prediction,
+          (SELECT annulations_moyennes_par_jour FROM tendances) as annulations_prevues,
+          (SELECT pertes_moyennes_par_jour FROM tendances) as pertes_prevues,
+          (SELECT annulations_seuil_alerte FROM tendances) as seuil_alerte
+        FROM generate_series(1, $1::int) n
       )
       SELECT 
-        niveau_risque,
-        COUNT(*) as reservations_a_risque,
-        SUM(tarif) as perte_potentielle,
-        ROUND(AVG(score_risque * 100), 2) as probabilite_moyenne,
-        COUNT(DISTINCT numeroterrain) as terrains_concernes,
-        MIN(datereservation) as premiere_date_risque,
-        MAX(datereservation) as derniere_date_risque
+        date_prediction::date as date,
+        TO_CHAR(date_prediction, 'DD/MM') as date_formattee,
+        TO_CHAR(date_prediction, 'Day') as jour_semaine,
+        ROUND(annulations_prevues) as annulations_prevues,
+        ROUND(pertes_prevues) as pertes_prevues,
+        seuil_alerte,
+        CASE 
+          WHEN annulations_prevues > seuil_alerte THEN 'risque_eleve'
+          WHEN annulations_prevues > (seuil_alerte * 0.7) THEN 'risque_modere'
+          ELSE 'risque_faible'
+        END as niveau_risque
       FROM predictions
-      GROUP BY niveau_risque
-      ORDER BY 
-        CASE niveau_risque
-          WHEN 'Élevé' THEN 1
-          WHEN 'Moyen' THEN 2
-          WHEN 'Faible' THEN 3
-        END
-    `);
+      ORDER BY date_prediction ASC
+    `, [periode]);
 
-    // Statistiques détaillées des prévisions
-    const statsPrevisions = await db.query(`
-      SELECT 
-        COUNT(*) as total_reservations_futures,
-        SUM(CASE WHEN risque_calcule > 0.1 THEN 1 ELSE 0 END) as reservations_risque,
-        ROUND(
-          (SUM(CASE WHEN risque_calcule > 0.1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0)
-          ), 2
-        ) as pourcentage_risque,
-        SUM(CASE WHEN risque_calcule > 0.1 THEN tarif ELSE 0 END) as perte_potentielle_totale
-      FROM (
-        SELECT 
-          tarif,
-          (
-            SELECT COUNT(*) * 1.0 / NULLIF(
-              (SELECT COUNT(*) FROM reservation r2 
-               WHERE r2.numeroterrain = r.numeroterrain 
-               AND r2.datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE), 1
-            )
-            FROM reservation r3 
-            WHERE r3.numeroterrain = r.numeroterrain 
-            AND r3.statut = 'annulée'
-            AND r3.datereservation BETWEEN CURRENT_DATE - INTERVAL '90 days' AND CURRENT_DATE
-          ) as risque_calcule
-        FROM reservation r
-        WHERE statut = 'confirmée'
-          AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '${periode} days'
-      ) risques
-    `);
+    // Calcul des statistiques de prévision
+    const stats = {
+      annulations_total_prevues: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.annulations_prevues), 0)),
+      pertes_total_prevues: Math.round(result.rows.reduce((sum, row) => sum + parseFloat(row.pertes_prevues), 0)),
+      jours_risque_eleve: result.rows.filter(row => row.niveau_risque === 'risque_eleve').length,
+      jours_risque_modere: result.rows.filter(row => row.niveau_risque === 'risque_modere').length,
+      periode_prediction: parseInt(periode)
+    };
 
     res.json({
       success: true,
-      data: {
-        previsions_par_risque: result.rows,
-        statistiques_generales: statsPrevisions.rows[0],
-        periode_analyse: parseInt(periode),
-        date_generation: new Date().toISOString()
-      }
+      data: result.rows,
+      statistiques: stats,
+      periode_analyse: parseInt(periode)
     });
   } catch (error) {
     console.error('❌ Erreur prévisions annulations:', error);
@@ -433,34 +401,63 @@ router.get('/previsions-annulations', async (req, res) => {
   }
 });
 
-// 📋 Détail des annulations récentes
-router.get('/annulations-recentes', async (req, res) => {
+// 📈 Analyse comparative annulations vs confirmations
+router.get('/comparatif-annulations-confirmations', async (req, res) => {
   try {
-    const { limit = 50 } = req.query;
-    
     const result = await db.query(`
+      WITH stats_comparatives AS (
+        SELECT 
+          datereservation,
+          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations,
+          COUNT(CASE WHEN statut = 'confirmée' THEN 1 END) as confirmations,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END), 0) as revenus_perdus,
+          COALESCE(SUM(CASE WHEN statut = 'confirmée' THEN tarif ELSE 0 END), 0) as revenus_gagnes,
+          COUNT(*) as total_reservations
+        FROM reservation 
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY datereservation
+      )
       SELECT 
-        numeroreservations,
-        numeroterrain,
         datereservation,
-        heure_reservation,
-        tarif,
-        motif_annulation,
-        date_annulation,
-        EXTRACT(EPOCH FROM (date_annulation - datereservation)) / 3600 as heures_avant_annulation
+        TO_CHAR(datereservation, 'DD/MM/YYYY') as date_formattee,
+        annulations,
+        confirmations,
+        revenus_perdus,
+        revenus_gagnes,
+        total_reservations,
+        ROUND((annulations * 100.0 / NULLIF(total_reservations, 0)), 2) as taux_annulation_jour,
+        ROUND((confirmations * 100.0 / NULLIF(total_reservations, 0)), 2) as taux_confirmation_jour,
+        CASE 
+          WHEN (annulations * 100.0 / NULLIF(total_reservations, 0)) > 20 THEN 'taux_eleve'
+          WHEN (annulations * 100.0 / NULLIF(total_reservations, 0)) > 10 THEN 'taux_modere'
+          ELSE 'taux_faible'
+        END as severite_annulation
+      FROM stats_comparatives
+      ORDER BY datereservation DESC
+    `);
+
+    // Statistiques globales
+    const statsGlobales = await db.query(`
+      SELECT 
+        COUNT(*) as total_reservations_30j,
+        COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as total_annulations_30j,
+        COUNT(CASE WHEN statut = 'confirmée' THEN 1 END) as total_confirmations_30j,
+        ROUND((COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_annulation_global,
+        COALESCE(SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END), 0) as revenus_perdus_30j,
+        COALESCE(SUM(CASE WHEN statut = 'confirmée' THEN tarif ELSE 0 END), 0) as revenus_gagnes_30j
       FROM reservation 
-      WHERE statut = 'annulée'
-      ORDER BY date_annulation DESC
-      LIMIT $1
-    `, [limit]);
+      WHERE datereservation >= CURRENT_DATE - INTERVAL '30 days'
+    `);
 
     res.json({
       success: true,
-      data: result.rows,
-      total: result.rowCount
+      data: {
+        quotidien: result.rows,
+        global: statsGlobales.rows[0]
+      }
     });
   } catch (error) {
-    console.error('❌ Erreur annulations récentes:', error);
+    console.error('❌ Erreur analyse comparative:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -469,68 +466,47 @@ router.get('/annulations-recentes', async (req, res) => {
   }
 });
 
-// Fonction utilitaire pour analyser les patterns d'annulation
-async function analyzeCancellationPatterns(stats) {
+// Fonction utilitaire pour calculer les trends des annulations
+async function calculateTrendsAnnulations(currentStats) {
   try {
-    const analysis = {
-      alertes: [],
-      recommendations: [],
-      tendances: {}
+    const lastMonthStats = await db.query(`
+      SELECT 
+        COUNT(*) as annulations_mois_dernier,
+        COALESCE(SUM(tarif), 0) as revenus_perdus_mois_dernier
+      FROM reservation 
+      WHERE statut = 'annulée'
+      AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE - INTERVAL '1 month')
+      AND EXTRACT(YEAR FROM datereservation) = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')
+    `);
+
+    const lastMonth = lastMonthStats.rows[0];
+    
+    const trends = {
+      annulations: {
+        value: calculatePercentageChange(currentStats.annulations_mois, lastMonth.annulations_mois_dernier),
+        isPositive: currentStats.annulations_mois < lastMonth.annulations_mois_dernier // Moins d'annulations = positif
+      },
+      revenus_perdus: {
+        value: calculatePercentageChange(currentStats.revenus_perdus_mois, lastMonth.revenus_perdus_mois_dernier),
+        isPositive: currentStats.revenus_perdus_mois < lastMonth.revenus_perdus_mois_dernier // Moins de pertes = positif
+      },
+      taux_annulation: {
+        value: calculatePercentageChange(currentStats.taux_annulation, 
+          lastMonth.annulations_mois_dernier * 100.0 / (lastMonth.annulations_mois_dernier + 50)), // Estimation
+        isPositive: currentStats.taux_annulation < (lastMonth.annulations_mois_dernier * 100.0 / (lastMonth.annulations_mois_dernier + 50))
+      }
     };
 
-    // Alertes basées sur les seuils
-    if (stats.taux_annulation_mois > 20) {
-      analysis.alertes.push({
-        niveau: 'CRITIQUE',
-        message: `Taux d'annulation élevé: ${stats.taux_annulation_mois}% ce mois-ci`,
-        action: 'Revoyez votre politique d annulation'
-      });
-    }
-
-    if (stats.revenus_perdus_mois > 1000) {
-      analysis.alertes.push({
-        niveau: 'ÉLEVÉ',
-        message: `Perte financière importante: ${stats.revenus_perdus_mois}€ ce mois-ci`,
-        action: 'Analysez les motifs d annulation récurrents'
-      });
-    }
-
-    if (stats.annulations_aujourdhui > 5) {
-      analysis.alertes.push({
-        niveau: 'URGENT',
-        message: `${stats.annulations_aujourdhui} annulations aujourd'hui`,
-        action: 'Vérifiez les problèmes potentiels'
-      });
-    }
-
-    // Recommendations
-    if (stats.motifs_annulation.length > 0) {
-      const motifPrincipal = stats.motifs_annulation[0];
-      analysis.recommendations.push({
-        type: 'MOTIF_PRINCIPAL',
-        message: `Motif d'annulation principal: "${motifPrincipal.motif_annulation}" (${motifPrincipal.pourcentage}%)`,
-        suggestion: 'Mettez en place des actions correctives'
-      });
-    }
-
-    // Analyse de tendance
-    if (stats.evolution_annulations.length >= 2) {
-      const dernierMois = stats.evolution_annulations[stats.evolution_annulations.length - 1];
-      const avantDernierMois = stats.evolution_annulations[stats.evolution_annulations.length - 2];
-      
-      const evolution = ((dernierMois.annulations_mois - avantDernierMois.annulations_mois) / avantDernierMois.annulations_mois) * 100;
-      
-      analysis.tendances.evolution_mensuelle = {
-        valeur: Math.round(evolution),
-        direction: evolution > 0 ? 'HAUSSE' : 'BAISSE'
-      };
-    }
-
-    return analysis;
+    return trends;
   } catch (error) {
-    console.error('Erreur analyse patterns:', error);
-    return { alertes: [], recommendations: [], tendances: {} };
+    console.error('Erreur calcul trends annulations:', error);
+    return {};
   }
+}
+
+function calculatePercentageChange(current, previous) {
+  if (previous === 0) return current > 0 ? 100 : 0;
+  return Math.round(((current - previous) / previous) * 100);
 }
 
 export default router;
