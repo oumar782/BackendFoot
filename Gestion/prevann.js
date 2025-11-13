@@ -162,7 +162,7 @@ router.get('/previsions-tendances', async (req, res) => {
             COALESCE(SUM(tarif), 0) as revenus_perdus,
             ROUND(
               (COUNT(*) * 100.0 / 
-              (SELECT COUNT(*) FROM reservation WHERE heuredebut = r.heuredebut AND statut = 'annulée')
+              (SELECT COUNT(*) FROM reservation WHERE heuredebut = r.heuredebut AND heurefin = r.heurefin AND statut = 'annulée')
               ), 2
             ) as concentration_horaire
           FROM reservation r
@@ -185,7 +185,7 @@ router.get('/previsions-tendances', async (req, res) => {
           SELECT 
             TO_CHAR(ms.mois, 'YYYY-MM') as periode,
             TO_CHAR(ms.mois, 'Mon YYYY') as periode_affichage,
-            COUNT(r.numeroreservations) as annulations,
+            COUNT(r.numeroreservation) as annulations,
             COALESCE(SUM(r.tarif), 0) as revenus_perdus,
             COUNT(DISTINCT r.numeroterrain) as terrains_affectes
           FROM mois_series ms
@@ -522,4 +522,5 @@ router.get('/previsions-tendances', async (req, res) => {
       });
     }
   });
+
 export default router;
