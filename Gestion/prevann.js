@@ -157,18 +157,17 @@ router.get('/previsions-tendances', async (req, res) => {
         db.query(`
           SELECT 
             heuredebut,
-            heurefin,
             COUNT(*) as annulations,
             COALESCE(SUM(tarif), 0) as revenus_perdus,
             ROUND(
               (COUNT(*) * 100.0 / 
-              (SELECT COUNT(*) FROM reservation WHERE heuredebut = r.heuredebut AND heurefin = r.heurefin AND statut = 'annulée')
+              (SELECT COUNT(*) FROM reservation WHERE heuredebut = r.heuredebut AND statut = 'annulée')
               ), 2
             ) as concentration_horaire
           FROM reservation r
           WHERE statut = 'annulée'
             AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
-          GROUP BY heuredebut, heurefin
+          GROUP BY heuredebut
           ORDER BY annulations DESC
           LIMIT 10
         `),
@@ -445,13 +444,12 @@ router.get('/previsions-tendances', async (req, res) => {
         db.query(`
           SELECT 
             heuredebut,
-            heurefin,
             COUNT(*) as annulations,
             ROUND(AVG(tarif), 2) as perte_moyenne
           FROM reservation 
           WHERE statut = 'annulée'
             AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
-          GROUP BY heuredebut, heurefin
+          GROUP BY heuredebut
           HAVING COUNT(*) > 3
           ORDER BY annulations DESC
           LIMIT 5
