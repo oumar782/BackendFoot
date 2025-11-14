@@ -420,7 +420,40 @@ router.get('/previsions-journalieres', async (req, res) => {
       GROUP BY EXTRACT(DOW FROM datereservation), TO_CHAR(datereservation, 'Day')
       ORDER BY jour_semaine
     `);
-
+// 📅 Route pour récupérer les dates d'annulation détaillées par terrain
+router.get('/dates-annulation-terrain/:terrainId', async (req, res) => {
+    try {
+      const { terrainId } = req.params;
+      
+      const result = await db.query(`
+        SELECT 
+          TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
+          TO_CHAR(datereservation, 'HH24:MI') as heure,
+          tarif,
+          nomclient as client,
+          statut
+        FROM reservation 
+        WHERE numeroterrain = $1 
+          AND statut = 'annulée'
+          AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
+        ORDER BY datereservation DESC
+        LIMIT 20
+      `, [terrainId]);
+  
+      res.json({
+        success: true,
+        data: result.rows,
+        terrain_id: terrainId
+      });
+    } catch (error) {
+      console.error('❌ Erreur dates annulation terrain:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur interne du serveur',
+        error: error.message
+      });
+    }
+  });
     // 2. Réservations futures groupées par jour
     const reservationsParJour = await db.query(`
       SELECT 
