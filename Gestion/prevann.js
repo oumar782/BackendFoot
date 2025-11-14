@@ -158,52 +158,80 @@ router.get('/evolution-annulations', async (req, res) => {
 });
 
 // 🎯 Analyse des terrains les plus affectés par les annulations
-router.get('/terrains-annulations', async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT 
-        numeroterrain,
-        nomterrain,
-        typeterrain,
-        COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_total,
-        COUNT(CASE WHEN statut = 'confirmée' THEN 1 END) as confirmations_total,
-        COUNT(*) as total_reservations,
-        COALESCE(SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END), 0) as revenus_perdus,
-        ROUND(
-          (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
-          NULLIF(COUNT(*), 0)
-          ), 2
-        ) as taux_annulation_terrain,
-        -- Période avec le plus d'annulations
-        (
-          SELECT TO_CHAR(datereservation, 'YYYY-MM')
-          FROM reservation r2 
-          WHERE r2.numeroterrain = reservation.numeroterrain 
-          AND r2.statut = 'annulée'
-          GROUP BY TO_CHAR(datereservation, 'YYYY-MM')
-          ORDER BY COUNT(*) DESC
-          LIMIT 1
-        ) as periode_max_annulations
-      FROM reservation 
-      WHERE datereservation >= CURRENT_DATE - INTERVAL '6 months'
-      GROUP BY numeroterrain, nomterrain, typeterrain
-      HAVING COUNT(CASE WHEN statut = 'annulée' THEN 1 END) > 0
-      ORDER BY annulations_total DESC, taux_annulation_terrain DESC
-    `);
-
-    res.json({
-      success: true,
-      data: result.rows
-    });
-  } catch (error) {
-    console.error('❌ Erreur analyse terrains annulations:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message
-    });
-  }
-});
+// 📋 Liste des annulations récentes avec détails complets
+router.get('/annulations-recentes', async (req, res) => {
+    try {
+      const { limite = '20' } = req.query;
+      
+      const result = await db.query(`
+        SELECT 
+          r.numeroreservations,
+          r.numeroterrain,
+          r.nomterrain,
+          r.typeterrain,
+          r.datereservation,
+          TO_CHAR(r.datereservation, 'DD/MM/YYYY') as date_formattee,
+          TO_CHAR(r.datereservation, 'HH24:MI') as heure_reservation,
+          r.tarif,
+          r.nomclient,
+          r.statut,
+          r.email,
+          r.telephone,
+          -- Calcul du nombre de jours avant/après la date de réservation
+          CASE 
+            WHEN r.datereservation > CURRENT_DATE THEN 
+              'Dans ' || EXTRACT(DAY FROM (r.datereservation - CURRENT_DATE)) || ' jour(s)'
+            WHEN r.datereservation = CURRENT_DATE THEN 
+              'Aujourd\\'hui'
+            ELSE 
+              'Il y a ' || EXTRACT(DAY FROM (CURRENT_DATE - r.datereservation)) || ' jour(s)'
+          END as delai_affichage,
+          -- Statut temporel
+          CASE 
+            WHEN r.datereservation > CURRENT_DATE THEN 'future'
+            WHEN r.datereservation = CURRENT_DATE THEN 'present'
+            ELSE 'passe'
+          END as statut_temporel
+        FROM reservation r
+        WHERE r.statut = 'annulée'
+          AND r.datereservation >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY 
+          CASE 
+            WHEN r.datereservation >= CURRENT_DATE THEN 0
+            ELSE 1
+          END,
+          ABS(EXTRACT(EPOCH FROM (r.datereservation - CURRENT_DATE))) ASC
+        LIMIT $1
+      `, [limite]);
+  
+      // Séparer les annulations futures, présentes et passées
+      const annulationsFutures = result.rows.filter(a => a.statut_temporel === 'future');
+      const annulationsPresentes = result.rows.filter(a => a.statut_temporel === 'present');
+      const annulationsPassees = result.rows.filter(a => a.statut_temporel === 'passe');
+  
+      res.json({
+        success: true,
+        data: {
+          annulations_futures: annulationsFutures,
+          annulations_aujourdhui: annulationsPresentes,
+          annulations_passees: annulationsPassees.slice(0, 10), // Limiter les passées
+          total: result.rows.length
+        },
+        resume: {
+          futures: annulationsFutures.length,
+          aujourdhui: annulationsPresentes.length,
+          passees: annulationsPassees.length
+        }
+      });
+    } catch (error) {
+      console.error('❌ Erreur annulations récentes:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur interne du serveur',
+        error: error.message
+      });
+    }
+  });
 
 // 📅 Analyse temporelle des annulations
 router.get('/analyse-temporelle-annulations', async (req, res) => {
@@ -422,38 +450,38 @@ router.get('/previsions-journalieres', async (req, res) => {
     `);
 // 📅 Route pour récupérer les dates d'annulation détaillées par terrain
 router.get('/dates-annulation-terrain/:terrainId', async (req, res) => {
-    try {
-      const { terrainId } = req.params;
-      
-      const result = await db.query(`
-        SELECT 
-          TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
-          TO_CHAR(datereservation, 'HH24:MI') as heure,
-          tarif,
-          nomclient as client,
-          statut
-        FROM reservation 
-        WHERE numeroterrain = $1 
-          AND statut = 'annulée'
-          AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-        ORDER BY datereservation DESC
-        LIMIT 20
-      `, [terrainId]);
-  
-      res.json({
-        success: true,
-        data: result.rows,
-        terrain_id: terrainId
-      });
-    } catch (error) {
-      console.error('❌ Erreur dates annulation terrain:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Erreur interne du serveur',
-        error: error.message
-      });
-    }
-  });
+  try {
+    const { terrainId } = req.params;
+    
+    const result = await db.query(`
+      SELECT 
+        TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
+        TO_CHAR(datereservation, 'HH24:MI') as heure,
+        tarif,
+        nomclient as client,
+        statut
+      FROM reservation 
+      WHERE numeroterrain = $1 
+        AND statut = 'annulée'
+        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
+      ORDER BY datereservation DESC
+      LIMIT 20
+    `, [terrainId]);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      terrain_id: terrainId
+    });
+  } catch (error) {
+    console.error('❌ Erreur dates annulation terrain:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
     // 2. Réservations futures groupées par jour
     const reservationsParJour = await db.query(`
       SELECT 
