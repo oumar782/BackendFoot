@@ -111,6 +111,59 @@ router.get('/dashboard-annulations', async (req, res) => {
     });
   }
 });
+// 📊 Route pour les terrains les plus affectés (CORRIGÉE)
+router.get('/terrains-annulations', async (req, res) => {
+    try {
+      console.log('📡 Requête terrains annulations reçue');
+      
+      const result = await db.query(`
+        SELECT 
+          numeroterrain,
+          nomterrain,
+          typeterrain,
+          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as annulations_total,
+          COUNT(CASE WHEN statut = 'confirmée' THEN 1 END) as confirmations_total,
+          COUNT(*) as total_reservations,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END), 0) as revenus_perdus,
+          ROUND(
+            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
+            NULLIF(COUNT(*), 0)
+            ), 2
+          ) as taux_annulation_terrain,
+          (
+            SELECT TO_CHAR(datereservation, 'YYYY-MM')
+            FROM reservation r2 
+            WHERE r2.numeroterrain = reservation.numeroterrain 
+            AND r2.statut = 'annulée'
+            GROUP BY TO_CHAR(datereservation, 'YYYY-MM')
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+          ) as periode_max_annulations
+        FROM reservation 
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '6 months'
+        GROUP BY numeroterrain, nomterrain, typeterrain
+        HAVING COUNT(CASE WHEN statut = 'annulée' THEN 1 END) > 0
+        ORDER BY annulations_total DESC, taux_annulation_terrain DESC
+        LIMIT 10
+      `);
+  
+      console.log(`✅ ${result.rows.length} terrains trouvés`);
+  
+      res.json({
+        success: true,
+        data: result.rows,
+        count: result.rows.length
+      });
+  
+    } catch (error) {
+      console.error('❌ Erreur analyse terrains annulations:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur interne du serveur',
+        error: error.message
+      });
+    }
+  });
 // 📊 Statistiques des annulations par période (futur, présent, passé)
 router.get('/stats-periodes-annulations', async (req, res) => {
     try {
