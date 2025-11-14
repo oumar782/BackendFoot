@@ -111,7 +111,50 @@ router.get('/dashboard-annulations', async (req, res) => {
     });
   }
 });
-
+// 📊 Statistiques des annulations par période (futur, présent, passé)
+router.get('/stats-periodes-annulations', async (req, res) => {
+    try {
+      const result = await db.query(`
+        SELECT 
+          -- Annulations futures (à venir)
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation > CURRENT_DATE THEN 1 END) as annulations_futures,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' AND datereservation > CURRENT_DATE THEN tarif ELSE 0 END), 0) as revenus_perdus_futurs,
+          
+          -- Annulations d'aujourd'hui
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation = CURRENT_DATE THEN 1 END) as annulations_aujourdhui,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' AND datereservation = CURRENT_DATE THEN tarif ELSE 0 END), 0) as revenus_perdus_aujourdhui,
+          
+          -- Annulations des 7 derniers jours (passé récent)
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE - INTERVAL '1 day' THEN 1 END) as annulations_7_jours,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE - INTERVAL '1 day' THEN tarif ELSE 0 END), 0) as revenus_perdus_7_jours,
+          
+          -- Prochaines annulations programmées (dans les 7 jours)
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE + INTERVAL '1 day' AND CURRENT_DATE + INTERVAL '7 days' THEN 1 END) as annulations_7_prochains_jours,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' AND datereservation BETWEEN CURRENT_DATE + INTERVAL '1 day' AND CURRENT_DATE + INTERVAL '7 days' THEN tarif ELSE 0 END), 0) as revenus_risque_7_jours
+        FROM reservation
+        WHERE statut = 'annulée'
+          AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
+      `);
+  
+      res.json({
+        success: true,
+        data: result.rows[0],
+        periodes: {
+          futur: 'Réservations annulées à venir',
+          aujourdhui: "Annulations d'aujourd'hui",
+          passe_recent: '7 derniers jours',
+          futur_proche: '7 prochains jours'
+        }
+      });
+    } catch (error) {
+      console.error('❌ Erreur stats périodes annulations:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur interne du serveur',
+        error: error.message
+      });
+    }
+  });
 // 📈 Évolution des annulations sur 12 mois
 router.get('/evolution-annulations', async (req, res) => {
   try {
@@ -232,6 +275,7 @@ router.get('/annulations-recentes', async (req, res) => {
       });
     }
   });
+  
 
 // 📅 Analyse temporelle des annulations
 router.get('/analyse-temporelle-annulations', async (req, res) => {
