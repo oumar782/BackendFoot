@@ -15,6 +15,7 @@ import CalendriersRouter from './Gestion/calendrier.js';
 import demo from './Gestion/demonstration.js';
 import prev from './Gestion/prev.js';
 import Prevan from './Gestion/prevann.js';
+import Commande from './Gestion/commande.js';
 
 dotenv.config();
 const app = express();
@@ -28,7 +29,8 @@ app.use(
       "http://localhost:5175",
       "https://footspace-reserve.netlify.app",
       "https://frabjous-gaufre-31e862.netlify.app",
-      "https://footspace-solutions.vercel.app"
+      "https://footspace-solutions.vercel.app",
+      "https://maillot-can.vercel.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -60,6 +62,7 @@ app.use('/api/demonstration', demo);
 app.use('/api/prevision', prev);
 app.use('/api/calendriers', CalendriersRouter);
 app.use('/api/prevannule', Prevan);
+app.use('/api/commande', Commande);
 
 // 🏥 Health check endpoint amélioré
 app.get('/api/health', async (req, res) => {
