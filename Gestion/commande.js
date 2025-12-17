@@ -3,8 +3,915 @@ import db from '../db.js';
 
 const router = express.Router();
 
-// 📊 ANALYSE GLOBALE - Tableau de bord principal
-router.get('/analytique/dashboard', async (req, res) => {
+// ==================== ROUTES DE BASE POUR COMMANDES ====================
+
+// 📌 Route pour récupérer toutes les commandes
+router.get('/', async (req, res) => {
+  try {
+    const sql = `
+      SELECT 
+        id,
+        nom_complet,
+        telephone,
+        email,
+        ville,
+        adresse_complete,
+        produit_id,
+        nom_produit,
+        prix_unitaire,
+        quantite,
+        taille,
+        sous_total,
+        frais_livraison,
+        total,
+        statut,
+        methode_paiement,
+        promotion_appliquee,
+        montant_promotion,
+        prix_original,
+        notes,
+        numero_commande,
+        date_creation,
+        date_modification
+      FROM commandes 
+      ORDER BY date_creation DESC
+    `;
+    
+    console.log('📋 Requête SQL:', sql);
+    
+    const result = await db.query(sql);
+    
+    console.log('📊 Commandes trouvées:', result.rows.length);
+    if (result.rows.length > 0) {
+      console.log('📝 Première commande:', {
+        id: result.rows[0].id,
+        nom_complet: result.rows[0].nom_complet,
+        total: result.rows[0].total,
+        statut: result.rows[0].statut
+      });
+    }
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Aucune commande trouvée.'
+      });
+    }
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur serveur:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📌 Route pour récupérer une commande spécifique par ID
+router.get('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const sql = `
+      SELECT 
+        id,
+        nom_complet,
+        telephone,
+        email,
+        ville,
+        adresse_complete,
+        produit_id,
+        nom_produit,
+        prix_unitaire,
+        quantite,
+        taille,
+        sous_total,
+        frais_livraison,
+        total,
+        statut,
+        methode_paiement,
+        promotion_appliquee,
+        montant_promotion,
+        prix_original,
+        notes,
+        numero_commande,
+        date_creation,
+        date_modification
+      FROM commandes 
+      WHERE id = $1
+    `;
+    
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètre ID:', id);
+    
+    const result = await db.query(sql, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commande non trouvée.'
+      });
+    }
+
+    console.log('✅ Commande trouvée:', result.rows[0]);
+    
+    res.json({
+      success: true,
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur serveur:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📌 Route pour créer une nouvelle commande
+router.post('/', async (req, res) => {
+  try {
+    const {
+      nom_complet,
+      telephone,
+      email,
+      ville,
+      adresse_complete,
+      produit_id,
+      nom_produit,
+      prix_unitaire,
+      quantite = 1,
+      taille,
+      sous_total,
+      frais_livraison = 29.00,
+      total,
+      statut = 'en_attente',
+      methode_paiement = 'livraison',
+      promotion_appliquee = false,
+      montant_promotion = 0.00,
+      prix_original,
+      notes = ''
+    } = req.body;
+
+    // Validation des champs requis
+    if (!nom_complet || !telephone || !ville || !adresse_complete || 
+        !produit_id || !nom_produit || !prix_unitaire || !taille || 
+        !sous_total || !total) {
+      return res.status(400).json({
+        success: false,
+        message: 'Champs requis manquants: nom_complet, telephone, ville, adresse_complete, produit_id, nom_produit, prix_unitaire, taille, sous_total, total sont obligatoires.'
+      });
+    }
+
+    // Générer un numéro de commande unique
+    const timestamp = Date.now();
+    const numero_commande = 'CMD-' + timestamp;
+
+    const sql = `
+      INSERT INTO commandes (
+        nom_complet, telephone, email, ville, adresse_complete,
+        produit_id, nom_produit, prix_unitaire, quantite, taille,
+        sous_total, frais_livraison, total, statut, methode_paiement,
+        promotion_appliquee, montant_promotion, prix_original, notes,
+        numero_commande
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+      RETURNING *
+    `;
+
+    const params = [
+      nom_complet, telephone, email, ville, adresse_complete,
+      produit_id, nom_produit, prix_unitaire, quantite, taille,
+      sous_total, frais_livraison, total, statut, methode_paiement,
+      promotion_appliquee, montant_promotion, prix_original, notes,
+      numero_commande
+    ];
+
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', params);
+
+    const result = await db.query(sql, params);
+    
+    console.log('✅ Commande créée:', result.rows[0]);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Commande créée avec succès.',
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur création commande:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour mettre à jour une commande
+router.put('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      nom_complet,
+      telephone,
+      email,
+      ville,
+      adresse_complete,
+      statut,
+      methode_paiement,
+      notes
+    } = req.body;
+
+    const sql = `
+      UPDATE commandes 
+      SET 
+        nom_complet = $1,
+        telephone = $2,
+        email = $3,
+        ville = $4,
+        adresse_complete = $5,
+        statut = $6,
+        methode_paiement = $7,
+        notes = $8,
+        date_modification = CURRENT_TIMESTAMP
+      WHERE id = $9
+      RETURNING *
+    `;
+
+    const params = [
+      nom_complet, telephone, email, ville, adresse_complete,
+      statut, methode_paiement, notes, id
+    ];
+
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', params);
+
+    const result = await db.query(sql, params);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commande non trouvée.'
+      });
+    }
+    
+    console.log('✅ Commande mise à jour:', result.rows[0]);
+    
+    res.json({
+      success: true,
+      message: 'Commande mise à jour avec succès.',
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur mise à jour commande:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour mettre à jour uniquement le statut
+router.patch('/:id/statut', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { statut } = req.body;
+
+    if (!statut) {
+      return res.status(400).json({
+        success: false,
+        message: 'Le champ statut est obligatoire.'
+      });
+    }
+
+    const sql = `
+      UPDATE commandes 
+      SET 
+        statut = $1,
+        date_modification = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `;
+
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', [statut, id]);
+
+    const result = await db.query(sql, [statut, id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commande non trouvée.'
+      });
+    }
+    
+    console.log('✅ Statut commande mis à jour:', result.rows[0]);
+    
+    res.json({
+      success: true,
+      message: 'Statut commande mis à jour avec succès.',
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur mise à jour statut:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour supprimer une commande
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const sql = 'DELETE FROM commandes WHERE id = $1 RETURNING *';
+    
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètre ID:', id);
+    
+    const result = await db.query(sql, [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commande non trouvée.'
+      });
+    }
+    
+    console.log('✅ Commande supprimée:', result.rows[0]);
+    
+    res.json({
+      success: true,
+      message: 'Commande supprimée avec succès.',
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur suppression commande:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📌 Route pour filtrer les commandes
+router.get('/filtre/recherche', async (req, res) => {
+  try {
+    const { nom_complet, telephone, ville, statut, numero_commande } = req.query;
+    
+    let sql = `
+      SELECT 
+        id,
+        nom_complet,
+        telephone,
+        email,
+        ville,
+        adresse_complete,
+        produit_id,
+        nom_produit,
+        prix_unitaire,
+        quantite,
+        taille,
+        sous_total,
+        frais_livraison,
+        total,
+        statut,
+        methode_paiement,
+        promotion_appliquee,
+        montant_promotion,
+        prix_original,
+        notes,
+        numero_commande,
+        date_creation,
+        date_modification
+      FROM commandes 
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramCount = 0;
+    
+    if (nom_complet) {
+      paramCount++;
+      sql += ` AND nom_complet ILIKE $${paramCount}`;
+      params.push(`%${nom_complet}%`);
+    }
+    
+    if (telephone) {
+      paramCount++;
+      sql += ` AND telephone ILIKE $${paramCount}`;
+      params.push(`%${telephone}%`);
+    }
+    
+    if (ville) {
+      paramCount++;
+      sql += ` AND ville ILIKE $${paramCount}`;
+      params.push(`%${ville}%`);
+    }
+    
+    if (statut) {
+      paramCount++;
+      sql += ` AND statut = $${paramCount}`;
+      params.push(statut);
+    }
+    
+    if (numero_commande) {
+      paramCount++;
+      sql += ` AND numero_commande ILIKE $${paramCount}`;
+      params.push(`%${numero_commande}%`);
+    }
+    
+    sql += ` ORDER BY date_creation DESC`;
+    
+    console.log('📋 Requête SQL:', sql);
+    console.log('📦 Paramètres:', params);
+    
+    const result = await db.query(sql, params);
+    
+    console.log('📊 Commandes trouvées:', result.rows.length);
+    
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur serveur:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📌 Route pour récupérer les statistiques
+router.get('/statistiques/resume', async (req, res) => {
+  try {
+    const sql = `
+      SELECT 
+        COUNT(*) as total_commandes,
+        SUM(CASE WHEN statut = 'en_attente' THEN 1 ELSE 0 END) as en_attente,
+        SUM(CASE WHEN statut = 'confirmee' THEN 1 ELSE 0 END) as confirmees,
+        SUM(CASE WHEN statut = 'expediee' THEN 1 ELSE 0 END) as expediees,
+        SUM(CASE WHEN statut = 'livree' THEN 1 ELSE 0 END) as livrees,
+        SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulees,
+        SUM(total) as chiffre_affaires,
+        SUM(quantite) as total_maillots,
+        AVG(total) as panier_moyen,
+        COUNT(DISTINCT ville) as villes_distinctes
+      FROM commandes
+    `;
+    
+    console.log('📋 Requête SQL:', sql);
+    
+    const result = await db.query(sql);
+    
+    console.log('📊 Statistiques calculées');
+    
+    res.json({
+      success: true,
+      data: result.rows[0] || {
+        total_commandes: 0,
+        en_attente: 0,
+        confirmees: 0,
+        expediees: 0,
+        livrees: 0,
+        annulees: 0,
+        chiffre_affaires: 0,
+        total_maillots: 0,
+        panier_moyen: 0,
+        villes_distinctes: 0
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur statistiques:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📌 Route pour récupérer les commandes par ville
+router.get('/statistiques/par-ville', async (req, res) => {
+  try {
+    const sql = `
+      SELECT 
+        ville,
+        COUNT(*) as nombre_commandes,
+        SUM(total) as chiffre_affaires,
+        SUM(quantite) as total_maillots
+      FROM commandes
+      WHERE statut != 'annulee'
+      GROUP BY ville
+      ORDER BY nombre_commandes DESC
+    `;
+    
+    console.log('📋 Requête SQL:', sql);
+    
+    const result = await db.query(sql);
+    
+    console.log('📊 Statistiques par ville:', result.rows.length);
+    
+    res.json({
+      success: true,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur statistiques par ville:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// ==================== ANALYSE AVANCÉE CLIENT-MAILLOT-VILLE ====================
+
+// 📊 1. CLIENTS PAR MODÈLE DE MAILLOT
+router.get('/analytique/clients-par-maillot', async (req, res) => {
+  try {
+    const { startDate, endDate, minClients = 1 } = req.query;
+    
+    let dateFilter = '';
+    const params = [];
+    let paramIndex = 1;
+    
+    if (startDate && endDate) {
+      dateFilter = 'WHERE date_creation BETWEEN $1 AND $2';
+      params.push(startDate, endDate);
+      paramIndex = 3;
+    }
+
+    const sql = `
+      WITH stats_maillot AS (
+        SELECT 
+          nom_produit as modele_maillot,
+          COUNT(DISTINCT email) as nombre_clients_uniques,
+          COUNT(*) as total_commandes,
+          SUM(quantite) as total_maillots_vendus,
+          SUM(sous_total) as chiffre_affaires,
+          ROUND(AVG(prix_unitaire), 2) as prix_moyen,
+          ROUND(AVG(quantite), 2) as quantite_moyenne_commande,
+          
+          -- Taille la plus populaire
+          MODE() WITHIN GROUP (ORDER BY taille) as taille_plus_vendue,
+          COUNT(DISTINCT taille) as nombre_tailles_differentes,
+          
+          -- Période d'activité
+          MIN(date_creation) as premiere_vente,
+          MAX(date_creation) as derniere_vente,
+          DATE_PART('day', MAX(date_creation) - MIN(date_creation)) as duree_vente_jours
+          
+        FROM commandes
+        ${dateFilter}
+        GROUP BY nom_produit
+      ),
+      
+      stats_detaillees AS (
+        SELECT 
+          nom_produit,
+          taille,
+          COUNT(DISTINCT email) as clients_par_taille,
+          SUM(quantite) as quantite_vendue_taille,
+          ROUND(AVG(prix_unitaire), 2) as prix_moyen_taille
+        FROM commandes
+        ${dateFilter}
+        GROUP BY nom_produit, taille
+      )
+      
+      SELECT 
+        sm.*,
+        -- Pourcentage de clients par rapport au total
+        ROUND(100.0 * sm.nombre_clients_uniques / NULLIF(
+          (SELECT SUM(nombre_clients_uniques) FROM stats_maillot), 0
+        ), 2) as pourcentage_clients_total,
+        
+        -- Taux de fidélité (clients qui achètent plusieurs fois le même modèle)
+        ROUND(100.0 * sm.total_commandes / NULLIF(sm.nombre_clients_uniques, 0) - 100, 2) as taux_fidelite_maillot,
+        
+        -- Valeur par client
+        ROUND(sm.chiffre_affaires / NULLIF(sm.nombre_clients_uniques, 0), 2) as valeur_moyenne_client,
+        
+        -- Rotation
+        ROUND(sm.total_maillots_vendus / NULLIF(sm.duree_vente_jours, 0), 2) as rotation_quotidienne,
+        
+        -- Détails par taille
+        (SELECT json_agg(row_to_json(sd)) 
+         FROM stats_detaillees sd 
+         WHERE sd.nom_produit = sm.modele_maillot 
+         ORDER BY sd.clients_par_taille DESC) as details_tailles
+         
+      FROM stats_maillot sm
+      WHERE sm.nombre_clients_uniques >= $${paramIndex}
+      ORDER BY sm.nombre_clients_uniques DESC
+    `;
+
+    params.push(parseInt(minClients));
+    
+    console.log('📋 Analyse clients par maillot');
+
+    const result = await db.query(sql, params);
+    
+    // Calcul des totaux
+    const totaux = {
+      total_modeles: result.rows.length,
+      total_clients: result.rows.reduce((sum, row) => sum + parseInt(row.nombre_clients_uniques), 0),
+      total_maillots: result.rows.reduce((sum, row) => sum + parseInt(row.total_maillots_vendus), 0),
+      total_ca: result.rows.reduce((sum, row) => sum + parseFloat(row.chiffre_affaires), 0),
+      moyenne_clients_par_modele: result.rows.length > 0 ? 
+        result.rows.reduce((sum, row) => sum + parseInt(row.nombre_clients_uniques), 0) / result.rows.length : 0
+    };
+
+    res.json({
+      success: true,
+      totaux,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur analyse clients par maillot:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 🏙️ 2. CLIENTS PAR VILLE
+router.get('/analytique/clients-par-ville', async (req, res) => {
+  try {
+    const { startDate, endDate, minClients = 1 } = req.query;
+    
+    let dateFilter = '';
+    const params = [];
+    let paramIndex = 1;
+    
+    if (startDate && endDate) {
+      dateFilter = 'WHERE date_creation BETWEEN $1 AND $2';
+      params.push(startDate, endDate);
+      paramIndex = 3;
+    }
+
+    const sql = `
+      WITH stats_ville AS (
+        SELECT 
+          ville,
+          COUNT(DISTINCT email) as nombre_clients_uniques,
+          COUNT(*) as total_commandes,
+          SUM(total) as chiffre_affaires,
+          SUM(quantite) as total_maillots_vendus,
+          ROUND(AVG(total), 2) as panier_moyen,
+          ROUND(AVG(quantite), 2) as quantite_moyenne_commande,
+          
+          -- Maillots les plus populaires par ville
+          MODE() WITHIN GROUP (ORDER BY nom_produit) as maillot_plus_vendu,
+          COUNT(DISTINCT nom_produit) as nombre_modeles_differents,
+          
+          -- Taille la plus populaire par ville
+          MODE() WITHIN GROUP (ORDER BY taille) as taille_plus_vendue,
+          
+          -- Période d'activité
+          MIN(date_creation) as premiere_commande,
+          MAX(date_creation) as derniere_commande,
+          DATE_PART('day', CURRENT_DATE - MAX(date_creation)) as jours_depuis_derniere_commande,
+          
+          -- Taux de fidélité ville
+          COUNT(DISTINCT CASE WHEN email IN (
+            SELECT email FROM commandes c2 
+            WHERE c2.ville = commandes.ville 
+            GROUP BY email 
+            HAVING COUNT(*) > 1
+          ) THEN email END) as clients_fideles
+          
+        FROM commandes
+        ${dateFilter ? dateFilter + ' AND' : 'WHERE'} ville IS NOT NULL
+        GROUP BY ville
+      ),
+      
+      top_maillots_ville AS (
+        SELECT 
+          ville,
+          nom_produit,
+          COUNT(DISTINCT email) as clients_maillot,
+          SUM(quantite) as quantite_vendue,
+          ROUND(100.0 * COUNT(DISTINCT email) / NULLIF(
+            (SELECT COUNT(DISTINCT email) FROM commandes c2 
+             WHERE c2.ville = c1.ville 
+             ${dateFilter ? 'AND ' + dateFilter.substring(6) : ''}), 0
+          ), 2) as penetration_maillot_ville
+        FROM commandes c1
+        ${dateFilter}
+        GROUP BY ville, nom_produit
+      )
+      
+      SELECT 
+        sv.*,
+        -- Pourcentage de clients par rapport au total
+        ROUND(100.0 * sv.nombre_clients_uniques / NULLIF(
+          (SELECT SUM(nombre_clients_uniques) FROM stats_ville), 0
+        ), 2) as pourcentage_clients_total,
+        
+        -- Pourcentage de CA par rapport au total
+        ROUND(100.0 * sv.chiffre_affaires / NULLIF(
+          (SELECT SUM(chiffre_affaires) FROM stats_ville), 0
+        ), 2) as pourcentage_ca_total,
+        
+        -- Taux de fidélité
+        ROUND(100.0 * sv.clients_fideles / NULLIF(sv.nombre_clients_uniques, 0), 2) as taux_fidelite_ville,
+        
+        -- Valeur par client
+        ROUND(sv.chiffre_affaires / NULLIF(sv.nombre_clients_uniques, 0), 2) as valeur_moyenne_client,
+        
+        -- Détails des maillots
+        (SELECT json_agg(row_to_json(tmv)) 
+         FROM top_maillots_ville tmv 
+         WHERE tmv.ville = sv.ville 
+         ORDER BY tmv.clients_maillot DESC 
+         LIMIT 5) as top_maillots
+         
+      FROM stats_ville sv
+      WHERE sv.nombre_clients_uniques >= $${paramIndex}
+      ORDER BY sv.nombre_clients_uniques DESC
+    `;
+
+    params.push(parseInt(minClients));
+    
+    console.log('📋 Analyse clients par ville');
+
+    const result = await db.query(sql, params);
+    
+    // Calcul des totaux
+    const totaux = {
+      total_villes: result.rows.length,
+      total_clients: result.rows.reduce((sum, row) => sum + parseInt(row.nombre_clients_uniques), 0),
+      total_commandes: result.rows.reduce((sum, row) => sum + parseInt(row.total_commandes), 0),
+      total_ca: result.rows.reduce((sum, row) => sum + parseFloat(row.chiffre_affaires), 0),
+      moyenne_clients_par_ville: result.rows.length > 0 ? 
+        result.rows.reduce((sum, row) => sum + parseInt(row.nombre_clients_uniques), 0) / result.rows.length : 0
+    };
+
+    res.json({
+      success: true,
+      totaux,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur analyse clients par ville:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📍 3. CLIENTS PAR QUARTIER (EXTRACTION DE L'ADRESSE)
+router.get('/analytique/clients-par-quartier', async (req, res) => {
+  try {
+    const { ville, minClients = 2 } = req.query;
+    
+    let whereClause = "WHERE statut != 'annulee' AND ville IS NOT NULL AND adresse_complete IS NOT NULL";
+    const params = [];
+    
+    if (ville) {
+      whereClause += ' AND ville ILIKE $1';
+      params.push(`%${ville}%`);
+    }
+
+    const sql = `
+      WITH extraction_quartier AS (
+        SELECT 
+          ville,
+          -- Extraction du quartier depuis l'adresse complète
+          CASE 
+            WHEN adresse_complete ILIKE '%quartier%' THEN 
+              SUBSTRING(adresse_complete FROM 'quartier[[:space:]]+([^,]+)')
+            WHEN adresse_complete ILIKE '%q.%' THEN 
+              SUBSTRING(adresse_complete FROM 'q\.[[:space:]]*([^,]+)')
+            WHEN adresse_complete ILIKE '%av.%' OR adresse_complete ILIKE '%avenue%' THEN 
+              'Centre-ville'
+            WHEN adresse_complete ILIKE '%rue%' OR adresse_complete ILIKE '%boulevard%' THEN 
+              'Centre-ville'
+            ELSE 'Autre secteur'
+          END as quartier,
+          email,
+          nom_complet,
+          telephone
+        FROM commandes
+        ${whereClause}
+      ),
+      
+      stats_quartier AS (
+        SELECT 
+          ville,
+          quartier,
+          COUNT(DISTINCT email) as clients_quartier,
+          COUNT(*) as commandes_quartier,
+          COUNT(DISTINCT nom_complet) as clients_identifies,
+          STRING_AGG(DISTINCT telephone, ', ') as telephones_quartier
+        FROM extraction_quartier
+        GROUP BY ville, quartier
+      ),
+      
+      top_maillots_quartier AS (
+        SELECT 
+          eq.ville,
+          eq.quartier,
+          c.nom_produit,
+          COUNT(DISTINCT c.email) as clients_maillot
+        FROM extraction_quartier eq
+        JOIN commandes c ON eq.email = c.email
+        GROUP BY eq.ville, eq.quartier, c.nom_produit
+      )
+      
+      SELECT 
+        sq.*,
+        -- Pourcentage de clients par rapport à la ville
+        ROUND(100.0 * sq.clients_quartier / NULLIF(
+          (SELECT COUNT(DISTINCT email) FROM commandes c2 WHERE c2.ville = sq.ville), 0
+        ), 2) as pourcentage_ville,
+        
+        -- Intensité d'activité
+        CASE 
+          WHEN sq.clients_quartier >= 10 THEN 'Zone très active'
+          WHEN sq.clients_quartier >= 5 THEN 'Zone active'
+          WHEN sq.clients_quartier >= 3 THEN 'Zone modérée'
+          ELSE 'Zone émergente'
+        END as intensite_activite,
+        
+        -- Top maillots du quartier
+        (SELECT json_agg(row_to_json(tmq)) 
+         FROM top_maillots_quartier tmq 
+         WHERE tmq.ville = sq.ville AND tmq.quartier = sq.quartier 
+         ORDER BY tmq.clients_maillot DESC 
+         LIMIT 3) as top_maillots
+         
+      FROM stats_quartier sq
+      WHERE sq.clients_quartier >= $${params.length + 1}
+      ORDER BY sq.ville, sq.clients_quartier DESC
+    `;
+
+    params.push(parseInt(minClients));
+    
+    console.log('📋 Analyse clients par quartier');
+
+    const result = await db.query(sql, params);
+    
+    // Calcul des totaux
+    const totaux = {
+      total_quartiers: result.rows.length,
+      total_clients: result.rows.reduce((sum, row) => sum + parseInt(row.clients_quartier), 0),
+      total_commandes: result.rows.reduce((sum, row) => sum + parseInt(row.commandes_quartier), 0),
+      zones_tres_actives: result.rows.filter(row => row.intensite_activite === 'Zone très active').length,
+      zones_actives: result.rows.filter(row => row.intensite_activite === 'Zone active').length
+    };
+
+    res.json({
+      success: true,
+      totaux,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur analyse clients par quartier:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📊 4. SYSTHÈSE COMPLÈTE CLIENT-MAILLOT-VILLE
+router.get('/analytique/synthese-complete', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     
@@ -12,208 +919,143 @@ router.get('/analytique/dashboard', async (req, res) => {
     const params = [];
     
     if (startDate && endDate) {
-      dateFilter = `WHERE date_creation BETWEEN $1 AND $2`;
+      dateFilter = 'WHERE date_creation BETWEEN $1 AND $2';
       params.push(startDate, endDate);
     }
 
     const sql = `
-      -- Métriques principales
-      WITH stats AS (
-        SELECT 
-          COUNT(*) as total_commandes,
-          SUM(total) as chiffre_affaires_total,
-          SUM(CASE WHEN statut = 'livree' THEN total ELSE 0 END) as ca_confirme,
-          SUM(quantite) as total_maillots_vendus,
-          COUNT(DISTINCT email) as clients_uniques,
-          COUNT(DISTINCT ville) as villes_couvertes,
-          AVG(total) as panier_moyen,
-          AVG(quantite) as quantite_moyenne,
-          
-          -- Analyse temporelle
-          DATE_TRUNC('day', date_creation) as jour,
-          DATE_TRUNC('week', date_creation) as semaine,
-          DATE_TRUNC('month', date_creation) as mois,
-          
-          -- Taux de conversion (si vous avez des données d'abandon)
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as commandes_annulees,
-          SUM(CASE WHEN statut IN ('livree', 'expediee', 'confirmee') THEN 1 ELSE 0 END) as commandes_validees,
-          
-          -- Analyse financière
-          SUM(frais_livraison) as total_frais_livraison,
-          SUM(montant_promotion) as total_promotions,
-          SUM(prix_original) as chiffre_affaires_hors_promo,
-          
-          -- Analyse produit
-          SUM(CASE WHEN promotion_appliquee = true THEN 1 ELSE 0 END) as commandes_promotionnelles
-        FROM commandes
-        ${dateFilter}
-        GROUP BY jour, semaine, mois
-      ),
-      
-      -- Tendance par statut
-      tendances_statut AS (
-        SELECT 
-          statut,
-          COUNT(*) as nombre,
-          SUM(total) as valeur_totale,
-          ROUND(AVG(total), 2) as valeur_moyenne,
-          ROUND(AVG(quantite), 2) as quantite_moyenne,
-          ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as pourcentage
-        FROM commandes
-        ${dateFilter ? dateFilter + ' AND' : 'WHERE'} date_creation >= CURRENT_DATE - INTERVAL '30 days'
-        GROUP BY statut
-        ORDER BY nombre DESC
-      ),
-      
-      -- Top produits
-      top_produits AS (
-        SELECT 
-          nom_produit,
-          COUNT(*) as nombre_commandes,
-          SUM(quantite) as quantite_vendue,
-          SUM(sous_total) as chiffre_affaires_produit,
-          ROUND(AVG(prix_unitaire), 2) as prix_moyen,
-          ROUND(SUM(quantite) * 100.0 / SUM(SUM(quantite)) OVER (), 2) as part_marche
-        FROM commandes
-        ${dateFilter}
-        GROUP BY nom_produit
-        ORDER BY quantite_vendue DESC
-        LIMIT 10
-      ),
-      
-      -- Analyse géographique
-      geo_analyse AS (
+      WITH donnees_croisees AS (
         SELECT 
           ville,
-          COUNT(*) as commandes,
-          SUM(total) as ca_ville,
-          SUM(quantite) as maillots_vendus,
-          ROUND(AVG(total), 2) as panier_moyen_ville,
-          COUNT(DISTINCT email) as clients_uniques_ville,
-          RANK() OVER (ORDER BY SUM(total) DESC) as classement_ca
-        FROM commandes
-        ${dateFilter}
-        GROUP BY ville
-        HAVING COUNT(*) >= 1
-        ORDER BY ca_ville DESC
-      ),
-      
-      -- Analyse temporelle détaillée
-      analyse_temporelle AS (
-        SELECT 
-          EXTRACT(HOUR FROM date_creation) as heure,
-          EXTRACT(DOW FROM date_creation) as jour_semaine,
-          TO_CHAR(date_creation, 'Day') as nom_jour,
-          COUNT(*) as commandes_par_heure,
-          SUM(total) as ca_par_heure,
-          ROUND(AVG(total), 2) as panier_moyen_heure
-        FROM commandes
-        ${dateFilter}
-        GROUP BY heure, jour_semaine, nom_jour
-        ORDER BY jour_semaine, heure
-      ),
-      
-      -- Analyse client
-      analyse_clients AS (
-        SELECT 
-          CASE 
-            WHEN COUNT(*) > 5 THEN 'Client fidèle'
-            WHEN COUNT(*) BETWEEN 2 AND 5 THEN 'Client récurrent'
-            ELSE 'Nouveau client'
-          END as segment_client,
-          COUNT(DISTINCT email) as nombre_clients,
-          SUM(total) as ca_segment,
-          ROUND(AVG(total), 2) as panier_moyen_segment,
-          COUNT(*) as total_commandes_segment
-        FROM commandes
-        ${dateFilter}
-        GROUP BY segment_client
-      ),
-      
-      -- Analyse des tailles
-      analyse_taille AS (
-        SELECT 
+          nom_produit,
           taille,
-          COUNT(*) as nombre_commandes,
-          SUM(quantite) as quantite_vendue,
-          ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as pourcentage_taille
-        FROM commandes
-        ${dateFilter}
-        GROUP BY taille
-        ORDER BY quantite_vendue DESC
-      ),
-      
-      -- Tendance temporelle (7 derniers jours)
-      tendance_7jours AS (
-        SELECT 
-          DATE(date_creation) as date,
-          COUNT(*) as commandes,
-          SUM(total) as chiffre_affaires,
+          COUNT(DISTINCT email) as clients_uniques,
+          COUNT(*) as total_achats,
           SUM(quantite) as maillots_vendus,
+          SUM(total) as chiffre_affaires,
           ROUND(AVG(total), 2) as panier_moyen,
-          LAG(COUNT(*)) OVER (ORDER BY DATE(date_creation)) as commandes_veille,
-          LAG(SUM(total)) OVER (ORDER BY DATE(date_creation)) as ca_veille
+          ROUND(AVG(quantite), 2) as quantite_moyenne,
+          MIN(date_creation) as premiere_commande,
+          MAX(date_creation) as derniere_commande
         FROM commandes
-        WHERE date_creation >= CURRENT_DATE - INTERVAL '7 days'
-        GROUP BY DATE(date_creation)
-        ORDER BY date
+        ${dateFilter ? dateFilter + ' AND' : 'WHERE'} statut != 'annulee' AND ville IS NOT NULL
+        GROUP BY ville, nom_produit, taille
       ),
       
-      -- Méthodes de paiement
-      methodes_paiement AS (
+      hotspots AS (
         SELECT 
-          methode_paiement,
-          COUNT(*) as nombre_commandes,
-          SUM(total) as total_ca,
-          ROUND(AVG(total), 2) as panier_moyen_methode,
-          ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as pourcentage_utilisation
-        FROM commandes
-        ${dateFilter}
-        GROUP BY methode_paiement
-        ORDER BY nombre_commandes DESC
+          ville,
+          nom_produit,
+          taille,
+          clients_uniques,
+          total_achats,
+          maillots_vendus,
+          chiffre_affaires,
+          panier_moyen,
+          quantite_moyenne,
+          premiere_commande,
+          derniere_commande,
+          ROUND(chiffre_affaires / NULLIF(clients_uniques, 0), 2) as valeur_par_client,
+          ROUND(maillots_vendus / NULLIF(clients_uniques, 0), 2) as maillots_par_client,
+          DATE_PART('day', derniere_commande - premiere_commande) as periode_activite_jours,
+          
+          -- Classification hotspots
+          CASE 
+            WHEN clients_uniques >= 5 THEN 'Hotspot majeur'
+            WHEN clients_uniques >= 3 THEN 'Hotspot moyen'
+            WHEN clients_uniques >= 2 THEN 'Hotspot mineur'
+            ELSE 'Activité faible'
+          END as niveau_hotspot,
+          
+          -- Potentiel de croissance
+          CASE 
+            WHEN ROUND(maillots_vendus / NULLIF(clients_uniques, 0), 2) >= 2 THEN 'Fort potentiel'
+            WHEN ROUND(maillots_vendus / NULLIF(clients_uniques, 0), 2) >= 1.5 THEN 'Potentiel moyen'
+            ELSE 'Potentiel limité'
+          END as potentiel_croissance
+          
+        FROM donnees_croisees
+      ),
+      
+      stats_ville AS (
+        SELECT 
+          ville,
+          COUNT(DISTINCT CONCAT(nom_produit, taille)) as combinaisons_uniques,
+          SUM(clients_uniques) as total_clients_ville,
+          SUM(maillots_vendus) as total_maillots_ville,
+          SUM(chiffre_affaires) as total_ca_ville,
+          COUNT(*) FILTER (WHERE niveau_hotspot = 'Hotspot majeur') as hotspots_majeurs,
+          COUNT(*) FILTER (WHERE niveau_hotspot = 'Hotspot moyen') as hotspots_moyens,
+          COUNT(*) FILTER (WHERE niveau_hotspot = 'Hotspot mineur') as hotspots_mineurs
+        FROM hotspots
+        GROUP BY ville
+      ),
+      
+      stats_maillot AS (
+        SELECT 
+          nom_produit,
+          COUNT(DISTINCT CONCAT(ville, taille)) as combinaisons_uniques,
+          SUM(clients_uniques) as total_clients_maillot,
+          SUM(maillots_vendus) as total_maillots_model,
+          SUM(chiffre_affaires) as total_ca_maillot,
+          COUNT(DISTINCT ville) as villes_distribuees
+        FROM hotspots
+        GROUP BY nom_produit
+      ),
+      
+      opportunites AS (
+        SELECT 
+          h1.ville,
+          h1.nom_produit as produit_actuel,
+          h1.taille as taille_actuelle,
+          h2.nom_produit as produit_potentiel,
+          h2.taille as taille_potentielle,
+          COUNT(DISTINCT h1.clients_uniques) as clients_communs
+        FROM hotspots h1
+        JOIN hotspots h2 ON h1.ville = h2.ville 
+          AND h1.nom_produit != h2.nom_produit
+          AND h1.clients_uniques > 0 AND h2.clients_uniques > 0
+        GROUP BY h1.ville, h1.nom_produit, h1.taille, h2.nom_produit, h2.taille
+        HAVING COUNT(DISTINCT h1.clients_uniques) >= 2
       )
 
       SELECT 
-        -- Récupérer toutes les données
-        (SELECT json_agg(row_to_json(stats)) FROM stats) as metrics_globales,
-        (SELECT json_agg(row_to_json(tendances_statut)) FROM tendances_statut) as tendances_statut,
-        (SELECT json_agg(row_to_json(top_produits)) FROM top_produits) as top_produits,
-        (SELECT json_agg(row_to_json(geo_analyse)) FROM geo_analyse) as analyse_geographique,
-        (SELECT json_agg(row_to_json(analyse_temporelle)) FROM analyse_temporelle) as analyse_temporelle,
-        (SELECT json_agg(row_to_json(analyse_clients)) FROM analyse_clients) as analyse_clients,
-        (SELECT json_agg(row_to_json(analyse_taille)) FROM analyse_taille) as analyse_taille,
-        (SELECT json_agg(row_to_json(tendance_7jours)) FROM tendance_7jours) as tendance_7jours,
-        (SELECT json_agg(row_to_json(methodes_paiement)) FROM methodes_paiement) as methodes_paiement
+        -- Hotspots d'activité
+        (SELECT json_agg(row_to_json(hotspots) ORDER BY clients_uniques DESC, chiffre_affaires DESC LIMIT 30) 
+         FROM hotspots) as hotspots_activite,
+        
+        -- Statistiques par ville
+        (SELECT json_agg(row_to_json(stats_ville) ORDER BY total_clients_ville DESC) 
+         FROM stats_ville) as statistiques_villes,
+        
+        -- Statistiques par maillot
+        (SELECT json_agg(row_to_json(stats_maillot) ORDER BY total_clients_maillot DESC) 
+         FROM stats_maillot) as statistiques_maillots,
+        
+        -- Opportunités de cross-selling
+        (SELECT json_agg(row_to_json(opportunites) ORDER BY clients_communs DESC LIMIT 15) 
+         FROM opportunites) as opportunites_cross_selling,
+        
+        -- Métriques globales
+        (SELECT COUNT(*) FROM hotspots) as total_combinaisons,
+        (SELECT SUM(total_clients_ville) FROM stats_ville) as total_clients_analyses,
+        (SELECT SUM(total_maillots_ville) FROM stats_ville) as total_maillots_vendus,
+        (SELECT SUM(total_ca_ville) FROM stats_ville) as total_chiffre_affaires,
+        (SELECT ROUND(AVG(total_clients_ville), 2) FROM stats_ville) as moyenne_clients_par_ville,
+        (SELECT COUNT(*) FROM hotspots WHERE niveau_hotspot = 'Hotspot majeur') as total_hotspots_majeurs
     `;
 
-    console.log('📋 Requête dashboard analytique');
+    console.log('📋 Synthèse complète client-maillot-ville');
 
     const result = await db.query(sql, params.length > 0 ? params : undefined);
     
-    const data = result.rows[0] || {};
-    
-    // Calcul des indicateurs de performance clés (KPI)
-    const kpis = {
-      taux_conversion: data.commandes_validees && data.total_commandes ? 
-        (data.commandes_validees / data.total_commandes * 100).toFixed(2) : 0,
-      taux_annulation: data.commandes_annulees && data.total_commandes ? 
-        (data.commandes_annulees / data.total_commandes * 100).toFixed(2) : 0,
-      valeur_vie_client: data.ca_confirme && data.clients_uniques ? 
-        (data.ca_confirme / data.clients_uniques).toFixed(2) : 0,
-      marge_livraison: data.total_frais_livraison && data.chiffre_affaires_total ? 
-        (data.total_frais_livraison / data.chiffre_affaires_total * 100).toFixed(2) : 0
-    };
-
     res.json({
       success: true,
-      data: {
-        kpis,
-        ...data
-      }
+      data: result.rows[0] || {}
     });
 
   } catch (error) {
-    console.error('❌ Erreur dashboard analytique:', error);
+    console.error('❌ Erreur synthèse complète:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur interne du serveur',
@@ -222,109 +1064,220 @@ router.get('/analytique/dashboard', async (req, res) => {
   }
 });
 
-// 📈 ANALYSE TEMPORELLE AVANCÉE
-router.get('/analytique/temporelle', async (req, res) => {
+// 🔍 5. RECHERCHE AVANCÉE PAR FILTRES
+router.get('/analytique/recherche-avancee', async (req, res) => {
   try {
-    const { periode = 'jour', startDate, endDate } = req.query;
+    const { ville, produit, taille, minClients = 1, dateDebut, dateFin } = req.query;
     
-    let dateTrunc;
-    switch(periode) {
-      case 'heure': dateTrunc = 'hour'; break;
-      case 'jour': dateTrunc = 'day'; break;
-      case 'semaine': dateTrunc = 'week'; break;
-      case 'mois': dateTrunc = 'month'; break;
-      default: dateTrunc = 'day';
-    }
-
-    let dateFilter = '';
+    let whereClause = "WHERE statut != 'annulee'";
     const params = [];
+    let paramCount = 0;
     
-    if (startDate && endDate) {
-      dateFilter = `WHERE date_creation BETWEEN $1 AND $2`;
-      params.push(startDate, endDate);
+    if (ville) {
+      paramCount++;
+      whereClause += ` AND ville ILIKE $${paramCount}`;
+      params.push(`%${ville}%`);
+    }
+    
+    if (produit) {
+      paramCount++;
+      whereClause += ` AND nom_produit ILIKE $${paramCount}`;
+      params.push(`%${produit}%`);
+    }
+    
+    if (taille) {
+      paramCount++;
+      whereClause += ` AND taille = $${paramCount}`;
+      params.push(taille);
+    }
+    
+    if (dateDebut && dateFin) {
+      paramCount++;
+      whereClause += ` AND date_creation BETWEEN $${paramCount} AND $${paramCount + 1}`;
+      params.push(dateDebut, dateFin);
+      paramCount++;
     }
 
     const sql = `
-      WITH donnees_temporelles AS (
+      WITH donnees_filtrees AS (
         SELECT 
-          DATE_TRUNC('${dateTrunc}', date_creation) as periode,
-          COUNT(*) as commandes,
+          ville,
+          nom_produit,
+          taille,
+          COUNT(DISTINCT email) as nombre_clients,
+          COUNT(*) as nombre_commandes,
+          SUM(quantite) as nombre_maillots,
           SUM(total) as chiffre_affaires,
-          SUM(quantite) as quantite_vendue,
-          SUM(CASE WHEN statut = 'livree' THEN total ELSE 0 END) as ca_confirme,
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulations,
-          COUNT(DISTINCT email) as nouveaux_clients,
           ROUND(AVG(total), 2) as panier_moyen,
           ROUND(AVG(quantite), 2) as quantite_moyenne,
-          
-          -- Calcul des tendances
-          LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)) as commandes_periode_precedente,
-          LAG(SUM(total)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)) as ca_periode_precedente,
-          
-          -- Analyse de croissance
-          ROUND(
-            ((COUNT(*) - LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation))) * 100.0 / 
-            NULLIF(LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)), 0)), 2
-          ) as croissance_commandes,
-          
-          ROUND(
-            ((SUM(total) - LAG(SUM(total)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation))) * 100.0 / 
-            NULLIF(LAG(SUM(total)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)), 0)), 2
-          ) as croissance_ca
-          
+          MIN(date_creation) as premiere_commande,
+          MAX(date_creation) as derniere_commande
         FROM commandes
-        ${dateFilter}
-        GROUP BY periode
-        ORDER BY periode DESC
+        ${whereClause}
+        GROUP BY ville, nom_produit, taille
+      ),
+      
+      clients_detaille AS (
+        SELECT 
+          c.ville,
+          c.nom_produit,
+          c.taille,
+          c.email,
+          c.nom_complet,
+          c.telephone,
+          COUNT(*) as achats_client,
+          SUM(c.quantite) as maillots_client,
+          SUM(c.total) as depense_client
+        FROM commandes c
+        ${whereClause}
+        GROUP BY c.ville, c.nom_produit, c.taille, c.email, c.nom_complet, c.telephone
       )
       
       SELECT 
-        periode,
-        commandes,
-        chiffre_affaires,
-        quantite_vendue,
-        ca_confirme,
-        annulations,
-        nouveaux_clients,
-        panier_moyen,
-        quantite_moyenne,
-        commandes_periode_precedente,
-        ca_periode_precedente,
-        croissance_commandes,
-        croissance_ca,
+        df.*,
+        DATE_PART('day', df.derniere_commande - df.premiere_commande) as periode_activite_jours,
+        ROUND(df.chiffre_affaires / NULLIF(df.nombre_clients, 0), 2) as valeur_par_client,
+        ROUND(df.nombre_maillots / NULLIF(df.nombre_clients, 0), 2) as maillots_par_client,
         
-        -- Indicateurs supplémentaires
-        ROUND(chiffre_affaires / NULLIF(commandes, 0), 2) as valeur_par_commande,
-        ROUND(quantite_vendue / NULLIF(commandes, 0), 2) as items_par_commande,
-        ROUND(100.0 * annulations / NULLIF(commandes, 0), 2) as taux_annulation
+        -- Clients détaillés
+        (SELECT json_agg(json_build_object(
+          'nom', cd.nom_complet,
+          'email', cd.email,
+          'telephone', cd.telephone,
+          'achats', cd.achats_client,
+          'maillots', cd.maillots_client,
+          'depense', cd.depense_client
+        )) 
+        FROM clients_detaille cd 
+        WHERE cd.ville = df.ville 
+          AND cd.nom_produit = df.nom_produit 
+          AND cd.taille = df.taille 
+        LIMIT 10) as liste_clients
         
-      FROM donnees_temporelles
-      ORDER BY periode DESC
-      LIMIT 50
+      FROM donnees_filtrees df
+      WHERE df.nombre_clients >= $${paramCount + 1}
+      ORDER BY df.nombre_clients DESC, df.chiffre_affaires DESC
     `;
 
-    console.log(`📋 Analyse temporelle (${periode})`);
+    params.push(parseInt(minClients));
+    
+    console.log('📋 Recherche avancée avec filtres:', { ville, produit, taille, minClients, dateDebut, dateFin });
 
-    const result = await db.query(sql, params.length > 0 ? params : undefined);
+    const result = await db.query(sql, params);
     
     // Calcul des totaux
     const totaux = {
-      total_commandes: result.rows.reduce((sum, row) => sum + parseInt(row.commandes), 0),
+      total_combinaisons: result.rows.length,
+      total_clients: result.rows.reduce((sum, row) => sum + parseInt(row.nombre_clients), 0),
+      total_commandes: result.rows.reduce((sum, row) => sum + parseInt(row.nombre_commandes), 0),
+      total_maillots: result.rows.reduce((sum, row) => sum + parseInt(row.nombre_maillots), 0),
       total_ca: result.rows.reduce((sum, row) => sum + parseFloat(row.chiffre_affaires), 0),
-      total_quantite: result.rows.reduce((sum, row) => sum + parseInt(row.quantite_vendue), 0),
-      moyenne_croissance: result.rows.length > 0 ? 
-        result.rows.reduce((sum, row) => sum + (row.croissance_ca || 0), 0) / result.rows.length : 0
+      moyenne_clients_par_combinaison: result.rows.length > 0 ? 
+        result.rows.reduce((sum, row) => sum + parseInt(row.nombre_clients), 0) / result.rows.length : 0
     };
 
     res.json({
       success: true,
-      periode: dateTrunc,
+      filtres_appliques: { ville, produit, taille, minClients, dateDebut, dateFin },
       totaux,
+      resultats: result.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur recherche avancée:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message 
+    });
+  }
+});
+
+// 📈 6. ÉVOLUTION TEMPORELLE CLIENT-MAILLOT-VILLE
+router.get('/analytique/evolution-temporelle', async (req, res) => {
+  try {
+    const { ville, produit, taille, periode = 'mois' } = req.query;
+    
+    let dateTrunc = 'month';
+    switch(periode) {
+      case 'jour': dateTrunc = 'day'; break;
+      case 'semaine': dateTrunc = 'week'; break;
+      case 'mois': dateTrunc = 'month'; break;
+      case 'annee': dateTrunc = 'year'; break;
+      default: dateTrunc = 'month';
+    }
+    
+    let whereClause = "WHERE statut != 'annulee'";
+    const params = [];
+    
+    if (ville) {
+      whereClause += ' AND ville = $1';
+      params.push(ville);
+    }
+    
+    if (produit) {
+      whereClause += params.length > 0 ? ' AND nom_produit = $2' : ' AND nom_produit = $1';
+      params.push(produit);
+    }
+    
+    if (taille) {
+      whereClause += params.length > 0 ? ' AND taille = $3' : ' AND taille = $1';
+      params.push(taille);
+    }
+
+    const sql = `
+      SELECT 
+        DATE_TRUNC('${dateTrunc}', date_creation) as periode,
+        ville,
+        nom_produit,
+        taille,
+        COUNT(DISTINCT email) as nouveaux_clients,
+        COUNT(*) as nouvelles_commandes,
+        SUM(quantite) as nouveaux_maillots,
+        SUM(total) as chiffre_affaires_periode,
+        ROUND(AVG(total), 2) as panier_moyen_periode,
+        
+        -- Croissance clients
+        LAG(COUNT(DISTINCT email)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)) as clients_periode_precedente,
+        ROUND(
+          (COUNT(DISTINCT email) - LAG(COUNT(DISTINCT email)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation))) * 100.0 / 
+          NULLIF(LAG(COUNT(DISTINCT email)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)), 0), 2
+        ) as croissance_clients,
+        
+        -- Clients cumulés
+        SUM(COUNT(DISTINCT email)) OVER (ORDER BY DATE_TRUNC('${dateTrunc}', date_creation)) as clients_cumules
+        
+      FROM commandes
+      ${whereClause}
+      GROUP BY DATE_TRUNC('${dateTrunc}', date_creation), ville, nom_produit, taille
+      ORDER BY periode DESC
+      LIMIT 24
+    `;
+
+    console.log(`📋 Évolution temporelle (${periode})`);
+
+    const result = await db.query(sql, params);
+    
+    // Calcul des tendances
+    const tendances = {
+      periode_analysee: periode,
+      total_periodes: result.rows.length,
+      croissance_moyenne: result.rows.length > 1 ? 
+        result.rows.reduce((sum, row) => sum + (row.croissance_clients || 0), 0) / (result.rows.length - 1) : 0,
+      clients_totaux: result.rows.length > 0 ? result.rows[0].clients_cumules : 0,
+      periode_max_croissance: result.rows.length > 1 ? 
+        result.rows.reduce((max, row) => row.croissance_clients > max.croissance_clients ? row : max, result.rows[1]) : null
+    };
+
+    res.json({
+      success: true,
+      filtres: { ville, produit, taille, periode },
+      tendances,
       data: result.rows
     });
 
   } catch (error) {
-    console.error('❌ Erreur analyse temporelle:', error);
+    console.error('❌ Erreur évolution temporelle:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur interne du serveur',
@@ -333,820 +1286,117 @@ router.get('/analytique/temporelle', async (req, res) => {
   }
 });
 
-// 📊 ANALYSE CLIENT AVANCÉE
-router.get('/analytique/clients', async (req, res) => {
+// 🎯 7. RECOMMANDATIONS STRATÉGIQUES
+router.get('/analytique/recommandations', async (req, res) => {
   try {
     const sql = `
-      WITH donnees_clients AS (
-        SELECT 
-          email,
-          nom_complet,
-          ville,
-          COUNT(*) as nombre_commandes,
-          SUM(total) as chiffre_affaires_total,
-          MIN(date_creation) as premiere_commande,
-          MAX(date_creation) as derniere_commande,
-          SUM(quantite) as total_maillots,
-          ROUND(AVG(total), 2) as panier_moyen,
-          ROUND(AVG(quantite), 2) as quantite_moyenne,
-          STRING_AGG(DISTINCT statut, ', ') as statuts_commandes,
-          
-          -- Segmentation RFM
-          DATE_PART('day', CURRENT_TIMESTAMP - MAX(date_creation)) as recence_jours,
-          COUNT(*) as frequence,
-          SUM(total) as monetisation,
-          
-          -- Produits achetés
-          STRING_AGG(DISTINCT nom_produit, ', ') as produits_achetes,
-          STRING_AGG(DISTINCT taille, ', ') as tailles_achetees
-          
-        FROM commandes
-        GROUP BY email, nom_complet, ville
-        HAVING COUNT(*) >= 1
-      ),
-      
-      segmentation_rfm AS (
-        SELECT 
-          *,
-          CASE 
-            WHEN recence_jours <= 30 THEN 'Très récent'
-            WHEN recence_jours <= 90 THEN 'Récent'
-            WHEN recence_jours <= 180 THEN 'Ancien'
-            ELSE 'Très ancien'
-          END as segment_recence,
-          
-          CASE 
-            WHEN frequence = 1 THEN 'Achat unique'
-            WHEN frequence BETWEEN 2 AND 5 THEN 'Client occasionnel'
-            WHEN frequence BETWEEN 6 AND 10 THEN 'Client régulier'
-            ELSE 'Client fidèle'
-          END as segment_frequence,
-          
-          CASE 
-            WHEN monetisation <= 500 THEN 'Petit panier'
-            WHEN monetisation <= 2000 THEN 'Panier moyen'
-            ELSE 'Gros panier'
-          END as segment_monetisation,
-          
-          -- Score RFM
-          (CASE WHEN recence_jours <= 30 THEN 4
-                WHEN recence_jours <= 90 THEN 3
-                WHEN recence_jours <= 180 THEN 2
-                ELSE 1 END) +
-          (CASE WHEN frequence = 1 THEN 1
-                WHEN frequence BETWEEN 2 AND 5 THEN 2
-                WHEN frequence BETWEEN 6 AND 10 THEN 3
-                ELSE 4 END) +
-          (CASE WHEN monetisation <= 500 THEN 1
-                WHEN monetisation <= 2000 THEN 2
-                ELSE 3 END) as score_rfm,
-          
-          -- Valeur vie client prédite
-          ROUND(monetisation / NULLIF(frequence, 0) * 
-                (CASE WHEN recence_jours <= 30 THEN 12
-                      WHEN recence_jours <= 90 THEN 6
-                      WHEN recence_jours <= 180 THEN 3
-                      ELSE 1 END), 2) as valeur_vie_client_estimee
-          
-        FROM donnees_clients
-      ),
-      
-      statistiques_segments AS (
-        SELECT 
-          segment_frequence,
-          COUNT(*) as nombre_clients,
-          SUM(chiffre_affaires_total) as ca_segment,
-          ROUND(AVG(chiffre_affaires_total), 2) as ca_moyen_par_client,
-          ROUND(AVG(recence_jours), 2) as recence_moyenne,
-          ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as pourcentage_clients
-        FROM segmentation_rfm
-        GROUP BY segment_frequence
-        ORDER BY ca_segment DESC
-      ),
-      
-      top_clients AS (
-        SELECT 
-          nom_complet,
-          email,
-          ville,
-          nombre_commandes,
-          chiffre_affaires_total,
-          recence_jours,
-          segment_frequence,
-          score_rfm,
-          valeur_vie_client_estimee,
-          RANK() OVER (ORDER BY chiffre_affaires_total DESC) as classement_ca
-        FROM segmentation_rfm
-        ORDER BY chiffre_affaires_total DESC
-        LIMIT 20
-      ),
-      
-      analyse_geo_clients AS (
+      WITH hotspots AS (
         SELECT 
           ville,
-          COUNT(DISTINCT email) as clients_uniques,
-          SUM(nombre_commandes) as total_commandes,
-          ROUND(AVG(chiffre_affaires_total), 2) as ca_moyen_par_client,
-          ROUND(SUM(chiffre_affaires_total) / COUNT(DISTINCT email), 2) as valeur_moyenne_client
-        FROM segmentation_rfm
-        GROUP BY ville
-        HAVING COUNT(DISTINCT email) >= 1
-        ORDER BY clients_uniques DESC
-      )
-
-      SELECT 
-        (SELECT COUNT(*) FROM donnees_clients) as total_clients,
-        (SELECT SUM(chiffre_affaires_total) FROM donnees_clients) as ca_total_clients,
-        (SELECT ROUND(AVG(chiffre_affaires_total), 2) FROM donnees_clients) as ca_moyen_client,
-        (SELECT ROUND(AVG(nombre_commandes), 2) FROM donnees_clients) as commandes_moyennes_par_client,
-        
-        (SELECT json_agg(row_to_json(top_clients)) FROM top_clients) as top_clients,
-        (SELECT json_agg(row_to_json(statistiques_segments)) FROM statistiques_segments) as segments_clients,
-        (SELECT json_agg(row_to_json(analyse_geo_clients)) FROM analyse_geo_clients) as geo_clients,
-        
-        -- Distribution RFM
-        (SELECT json_agg(row_to_json(
-          SELECT segment_recence, COUNT(*) FROM segmentation_rfm GROUP BY segment_recence
-        ))) as distribution_recence,
-        
-        (SELECT json_agg(row_to_json(
-          SELECT segment_frequence, COUNT(*) FROM segmentation_rfm GROUP BY segment_frequence
-        ))) as distribution_frequence
-    `;
-
-    console.log('📋 Analyse clients avancée');
-
-    const result = await db.query(sql);
-    
-    res.json({
-      success: true,
-      data: result.rows[0] || {}
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur analyse clients:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message 
-    });
-  }
-});
-
-// 📦 ANALYSE PRODUIT AVANCÉE
-router.get('/analytique/produits', async (req, res) => {
-  try {
-    const sql = `
-      WITH stats_produits AS (
-        SELECT 
           nom_produit,
-          COUNT(*) as nombre_commandes,
-          SUM(quantite) as quantite_vendue,
-          SUM(sous_total) as chiffre_affaires_produit,
-          ROUND(AVG(prix_unitaire), 2) as prix_moyen,
-          MIN(prix_unitaire) as prix_min,
-          MAX(prix_unitaire) as prix_max,
-          ROUND(AVG(quantite), 2) as quantite_moyenne_par_commande,
-          
-          -- Analyse temporelle produit
-          MIN(date_creation) as premiere_vente,
-          MAX(date_creation) as derniere_vente,
-          DATE_PART('day', MAX(date_creation) - MIN(date_creation)) as duree_vente_jours,
-          
-          -- Analyse des tailles
-          MODE() WITHIN GROUP (ORDER BY taille) as taille_plus_vendue,
-          COUNT(DISTINCT taille) as nombre_tailles_vendues,
-          
-          -- Analyse des promotions
-          SUM(CASE WHEN promotion_appliquee = true THEN 1 ELSE 0 END) as ventes_en_promotion,
-          SUM(CASE WHEN promotion_appliquee = true THEN montant_promotion ELSE 0 END) as total_promotions_appliquees,
-          
-          -- Taux de rotation
-          ROUND(SUM(quantite) / NULLIF(COUNT(DISTINCT DATE(date_creation)), 0), 2) as rotation_quotidienne
-          
+          taille,
+          COUNT(DISTINCT email) as clients,
+          SUM(quantite) as maillots_vendus,
+          SUM(total) as ca
         FROM commandes
         WHERE statut != 'annulee'
-        GROUP BY nom_produit
+        GROUP BY ville, nom_produit, taille
       ),
       
-      performance_produits AS (
-        SELECT 
-          *,
-          ROUND(chiffre_affaires_produit * 100.0 / SUM(chiffre_affaires_produit) OVER (), 2) as part_marche_ca,
-          ROUND(quantite_vendue * 100.0 / SUM(quantite_vendue) OVER (), 2) as part_marche_quantite,
-          ROUND(nombre_commandes * 100.0 / SUM(nombre_commandes) OVER (), 2) as part_marche_commandes,
-          
-          -- Indice de performance
-          ROUND(
-            (part_marche_ca * 0.4 + part_marche_quantite * 0.3 + part_marche_commandes * 0.3) / 
-            (quantite_vendue / NULLIF(duree_vente_jours, 0)), 2
-          ) as indice_performance,
-          
-          -- Classification ABC
-          CASE 
-            WHEN ROUND(chiffre_affaires_produit * 100.0 / SUM(chiffre_affaires_produit) OVER (), 2) >= 70 THEN 'A - Produit clé'
-            WHEN ROUND(chiffre_affaires_produit * 100.0 / SUM(chiffre_affaires_produit) OVER (), 2) >= 90 THEN 'B - Produit important'
-            ELSE 'C - Produit secondaire'
-          END as classification_abc
-          
-        FROM stats_produits
-      ),
-      
-      tendance_ventes AS (
-        SELECT 
-          nom_produit,
-          DATE_TRUNC('week', date_creation) as semaine,
-          SUM(quantite) as quantite_vendue_semaine,
-          SUM(sous_total) as ca_semaine,
-          COUNT(*) as commandes_semaine
-        FROM commandes
-        WHERE date_creation >= CURRENT_DATE - INTERVAL '12 weeks'
-        GROUP BY nom_produit, DATE_TRUNC('week', date_creation)
-      ),
-      
-      correlation_taille_prix AS (
-        SELECT 
-          taille,
-          ROUND(AVG(prix_unitaire), 2) as prix_moyen_taille,
-          SUM(quantite) as quantite_vendue_taille,
-          COUNT(*) as nombre_commandes_taille,
-          ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as popularite_taille
-        FROM commandes
-        GROUP BY taille
-        ORDER BY quantite_vendue_taille DESC
-      ),
-      
-      analyse_croix_produits AS (
-        SELECT 
-          a.nom_produit as produit_a,
-          b.nom_produit as produit_b,
-          COUNT(*) as achat_conjoint
-        FROM commandes a
-        JOIN commandes b ON a.email = b.email 
-          AND a.date_creation = b.date_creation
-          AND a.nom_produit != b.nom_produit
-        GROUP BY a.nom_produit, b.nom_produit
-        HAVING COUNT(*) >= 2
-        ORDER BY achat_conjoint DESC
-        LIMIT 10
-      )
-
-      SELECT 
-        (SELECT json_agg(row_to_json(performance_produits)) FROM performance_produits ORDER BY chiffre_affaires_produit DESC) as produits_performance,
-        (SELECT json_agg(row_to_json(correlation_taille_prix)) FROM correlation_taille_prix) as analyse_taille,
-        (SELECT json_agg(row_to_json(analyse_croix_produits)) FROM analyse_croix_produits) as produits_associes,
-        
-        -- Métriques globales produits
-        (SELECT COUNT(DISTINCT nom_produit) FROM commandes) as nombre_produits_distincts,
-        (SELECT SUM(quantite_vendue) FROM stats_produits) as total_maillots_vendus,
-        (SELECT ROUND(AVG(quantite_vendue), 2) FROM stats_produits) as moyenne_vente_par_produit,
-        (SELECT ROUND(STDDEV(quantite_vendue), 2) FROM stats_produits) as ecart_type_ventes
-    `;
-
-    console.log('📋 Analyse produits avancée');
-
-    const result = await db.query(sql);
-    
-    res.json({
-      success: true,
-      data: result.rows[0] || {}
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur analyse produits:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message 
-    });
-  }
-});
-
-// 🎯 ANALYSE PROMOTIONNELLE
-router.get('/analytique/promotions', async (req, res) => {
-  try {
-    const sql = `
-      WITH analyse_promotions AS (
-        SELECT 
-          promotion_appliquee,
-          COUNT(*) as nombre_commandes,
-          SUM(total) as chiffre_affaires,
-          SUM(montant_promotion) as total_reduction,
-          SUM(quantite) as quantite_vendue,
-          ROUND(AVG(total), 2) as panier_moyen,
-          ROUND(AVG(montant_promotion), 2) as reduction_moyenne,
-          ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as pourcentage_commandes,
-          
-          -- Analyse par statut
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulations,
-          SUM(CASE WHEN statut = 'livree' THEN 1 ELSE 0 END) as livraisons_confirmees,
-          
-          -- Efficacité promotionnelle
-          ROUND(SUM(total) / NULLIF(SUM(montant_promotion), 0), 2) as ratio_ca_reduction,
-          ROUND(SUM(quantite) / NULLIF(COUNT(*), 0), 2) as quantite_moyenne_panier
-          
-        FROM commandes
-        GROUP BY promotion_appliquee
-      ),
-      
-      impact_promotion_produit AS (
-        SELECT 
-          nom_produit,
-          promotion_appliquee,
-          COUNT(*) as commandes,
-          SUM(quantite) as quantite_vendue,
-          SUM(total) as ca,
-          ROUND(AVG(prix_unitaire), 2) as prix_moyen,
-          ROUND(AVG(montant_promotion), 2) as reduction_moyenne,
-          ROUND(100.0 * SUM(montant_promotion) / SUM(prix_original), 2) as taux_reduction_moyen
-        FROM commandes
-        WHERE promotion_appliquee = true
-        GROUP BY nom_produit, promotion_appliquee
-        ORDER BY quantite_vendue DESC
-        LIMIT 15
-      ),
-      
-      evolution_promotions AS (
-        SELECT 
-          DATE_TRUNC('week', date_creation) as semaine,
-          SUM(CASE WHEN promotion_appliquee = true THEN 1 ELSE 0 END) as commandes_promo,
-          SUM(CASE WHEN promotion_appliquee = false THEN 1 ELSE 0 END) as commandes_sans_promo,
-          SUM(CASE WHEN promotion_appliquee = true THEN total ELSE 0 END) as ca_promo,
-          SUM(CASE WHEN promotion_appliquee = false THEN total ELSE 0 END) as ca_sans_promo,
-          ROUND(100.0 * SUM(CASE WHEN promotion_appliquee = true THEN 1 ELSE 0 END) / COUNT(*), 2) as taux_promotion_semaine
-        FROM commandes
-        WHERE date_creation >= CURRENT_DATE - INTERVAL '12 weeks'
-        GROUP BY DATE_TRUNC('week', date_creation)
-        ORDER BY semaine DESC
-      ),
-      
-      client_promotion AS (
-        SELECT 
-          email,
-          COUNT(*) as total_commandes,
-          SUM(CASE WHEN promotion_appliquee = true THEN 1 ELSE 0 END) as commandes_promo,
-          SUM(CASE WHEN promotion_appliquee = false THEN 1 ELSE 0 END) as commandes_sans_promo,
-          ROUND(100.0 * SUM(CASE WHEN promotion_appliquee = true THEN 1 ELSE 0 END) / COUNT(*), 2) as taux_promotion_client,
-          SUM(CASE WHEN promotion_appliquee = true THEN montant_promotion ELSE 0 END) as total_economise
-        FROM commandes
-        GROUP BY email
-        HAVING COUNT(*) >= 2
-      )
-
-      SELECT 
-        (SELECT json_agg(row_to_json(analyse_promotions)) FROM analyse_promotions) as analyse_globale,
-        (SELECT json_agg(row_to_json(impact_promotion_produit)) FROM impact_promotion_produit) as impact_produits,
-        (SELECT json_agg(row_to_json(evolution_promotions)) FROM evolution_promotions) as evolution_temporelle,
-        (SELECT json_agg(row_to_json(client_promotion)) FROM client_promotion LIMIT 20) as clients_promotion,
-        
-        -- KPI Promotions
-        (SELECT ROUND(AVG(taux_promotion_client), 2) FROM client_promotion) as taux_promotion_client_moyen,
-        (SELECT SUM(total_economise) FROM client_promotion) as total_economies_clients,
-        (SELECT COUNT(*) FROM client_promotion WHERE taux_promotion_client >= 50) as clients_sensibles_promotions
-    `;
-
-    console.log('📋 Analyse promotions');
-
-    const result = await db.query(sql);
-    
-    res.json({
-      success: true,
-      data: result.rows[0] || {}
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur analyse promotions:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message 
-    });
-  }
-});
-
-// 📍 ANALYSE GÉOGRAPHIQUE AVANCÉE
-router.get('/analytique/geographique', async (req, res) => {
-  try {
-    const sql = `
-      WITH stats_ville AS (
+      zones_sous_exploitees AS (
         SELECT 
           ville,
-          COUNT(*) as nombre_commandes,
-          COUNT(DISTINCT email) as clients_uniques,
-          SUM(total) as chiffre_affaires_ville,
-          SUM(quantite) as maillots_vendus,
-          ROUND(AVG(total), 2) as panier_moyen_ville,
-          ROUND(AVG(quantite), 2) as quantite_moyenne_ville,
-          
-          -- Analyse temporelle par ville
-          MIN(date_creation) as premiere_commande_ville,
-          MAX(date_creation) as derniere_commande_ville,
-          
-          -- Analyse des statuts par ville
-          SUM(CASE WHEN statut = 'livree' THEN 1 ELSE 0 END) as commandes_livrees,
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as commandes_annulees,
-          
-          -- Produits populaires par ville
-          MODE() WITHIN GROUP (ORDER BY nom_produit) as produit_plus_vendu,
-          MODE() WITHIN GROUP (ORDER BY taille) as taille_plus_vendue
-          
+          COUNT(DISTINCT nom_produit) as modeles_presents,
+          COUNT(DISTINCT taille) as tailles_presentes,
+          ROUND(100.0 * COUNT(DISTINCT nom_produit) / NULLIF(
+            (SELECT COUNT(DISTINCT nom_produit) FROM commandes), 0
+          ), 2) as couverture_modeles,
+          ROUND(100.0 * COUNT(DISTINCT taille) / 5, 2) as couverture_tailles
         FROM commandes
+        WHERE statut != 'annulee'
         GROUP BY ville
+      ),
+      
+      opportunites_produits AS (
+        SELECT 
+          h1.ville,
+          h1.nom_produit as produit_actuel,
+          p.nom_produit as produit_suggestion,
+          COUNT(*) as similarites
+        FROM hotspots h1
+        CROSS JOIN (SELECT DISTINCT nom_produit FROM commandes) p
+        WHERE p.nom_produit NOT IN (
+          SELECT nom_produit FROM hotspots h2 
+          WHERE h2.ville = h1.ville
+        )
+        AND h1.clients >= 2
+        GROUP BY h1.ville, h1.nom_produit, p.nom_produit
         HAVING COUNT(*) >= 1
-      ),
-      
-      performance_ville AS (
-        SELECT 
-          *,
-          ROUND(chiffre_affaires_ville * 100.0 / SUM(chiffre_affaires_ville) OVER (), 2) as part_marche_ca,
-          ROUND(nombre_commandes * 100.0 / SUM(nombre_commandes) OVER (), 2) as part_marche_commandes,
-          ROUND(maillots_vendus * 100.0 / SUM(maillots_vendus) OVER (), 2) as part_marche_quantite,
-          
-          -- Indice de performance ville
-          ROUND(
-            (part_marche_ca * 0.5 + part_marche_commandes * 0.3 + part_marche_quantite * 0.2) * 
-            (clients_uniques / NULLIF(nombre_commandes, 0)), 2
-          ) as indice_performance_ville,
-          
-          -- Taux de rétention ville
-          ROUND(100.0 * clients_uniques / NULLIF(nombre_commandes, 0), 2) as taux_fidelite_ville,
-          
-          -- Taux de succès livraison
-          ROUND(100.0 * commandes_livrees / NULLIF(nombre_commandes, 0), 2) as taux_succes_livraison
-          
-        FROM stats_ville
-      ),
-      
-      tendance_geo_temporelle AS (
-        SELECT 
-          ville,
-          DATE_TRUNC('month', date_creation) as mois,
-          COUNT(*) as commandes_mois,
-          SUM(total) as ca_mois,
-          SUM(quantite) as quantite_mois,
-          ROUND(AVG(total), 2) as panier_moyen_mois
-        FROM commandes
-        WHERE date_creation >= CURRENT_DATE - INTERVAL '6 months'
-        GROUP BY ville, DATE_TRUNC('month', date_creation)
-      ),
-      
-      analyse_distance AS (
-        SELECT 
-          ville,
-          ROUND(AVG(frais_livraison), 2) as frais_livraison_moyen,
-          COUNT(*) as commandes_avec_livraison,
-          SUM(frais_livraison) as total_frais_livraison_ville
-        FROM commandes
-        WHERE frais_livraison > 0
-        GROUP BY ville
-      ),
-      
-      clusters_geographiques AS (
-        SELECT 
-          CASE 
-            WHEN nombre_commandes >= 100 THEN 'Ville majeure'
-            WHEN nombre_commandes >= 50 THEN 'Ville moyenne'
-            WHEN nombre_commandes >= 20 THEN 'Petite ville'
-            ELSE 'Ville émergente'
-          END as cluster_ville,
-          COUNT(*) as nombre_villes,
-          SUM(nombre_commandes) as total_commandes_cluster,
-          SUM(chiffre_affaires_ville) as total_ca_cluster,
-          ROUND(AVG(panier_moyen_ville), 2) as panier_moyen_cluster
-        FROM performance_ville
-        GROUP BY cluster_ville
-        ORDER BY total_ca_cluster DESC
       )
-
+      
       SELECT 
-        (SELECT json_agg(row_to_json(performance_ville ORDER BY chiffre_affaires_ville DESC)) FROM performance_ville) as villes_performance,
-        (SELECT json_agg(row_to_json(tendance_geo_temporelle)) FROM tendance_geo_temporelle) as tendance_temporelle_geo,
-        (SELECT json_agg(row_to_json(analyse_distance)) FROM analyse_distance) as analyse_livraison,
-        (SELECT json_agg(row_to_json(clusters_geographiques)) FROM clusters_geographiques) as clusters_geographiques,
-        
-        -- Métriques globales géographiques
-        (SELECT COUNT(DISTINCT ville) FROM commandes) as total_villes,
-        (SELECT SUM(chiffre_affaires_ville) FROM performance_ville) as ca_total_geo,
-        (SELECT ROUND(AVG(panier_moyen_ville), 2) FROM performance_ville) as panier_moyen_global,
-        (SELECT ROUND(STDDEV(panier_moyen_ville), 2) FROM performance_ville) as ecart_type_panier_ville
-    `;
-
-    console.log('📋 Analyse géographique avancée');
-
-    const result = await db.query(sql);
-    
-    res.json({
-      success: true,
-      data: result.rows[0] || {}
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur analyse géographique:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message 
-    });
-  }
-});
-
-// 📉 ANALYSE DES RISQUES ET PERFORMANCE
-router.get('/analytique/performance', async (req, res) => {
-  try {
-    const sql = `
-      WITH indicateurs_performance AS (
-        SELECT 
-          -- Indicateurs de volume
-          COUNT(*) as total_commandes,
-          SUM(total) as chiffre_affaires_total,
-          SUM(quantite) as total_maillots_vendus,
-          
-          -- Indicateurs de qualité
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as commandes_annulees,
-          SUM(CASE WHEN statut = 'livree' THEN 1 ELSE 0 END) as commandes_livrees,
-          SUM(CASE WHEN statut = 'en_attente' THEN 1 ELSE 0 END) as commandes_en_attente,
-          
-          -- Indicateurs financiers
-          SUM(frais_livraison) as total_frais_livraison,
-          SUM(montant_promotion) as total_promotions,
-          ROUND(SUM(frais_livraison) * 100.0 / SUM(total), 2) as pourcentage_frais_livraison,
-          ROUND(SUM(montant_promotion) * 100.0 / SUM(prix_original), 2) as pourcentage_promotions,
-          
-          -- Indicateurs clients
-          COUNT(DISTINCT email) as clients_uniques,
-          COUNT(DISTINCT ville) as villes_couvertes,
-          
-          -- Indicateurs temporels
-          DATE_PART('day', MAX(date_creation) - MIN(date_creation)) as periode_analyse_jours,
-          ROUND(COUNT(*) / DATE_PART('day', MAX(date_creation) - MIN(date_creation)), 2) as commandes_par_jour,
-          ROUND(SUM(total) / DATE_PART('day', MAX(date_creation) - MIN(date_creation)), 2) as ca_par_jour
-          
-        FROM commandes
-      ),
-      
-      analyse_risques AS (
-        SELECT 
-          -- Risque d'annulation
-          ville,
-          COUNT(*) as commandes_ville,
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulations_ville,
-          ROUND(100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*), 2) as taux_annulation_ville,
-          
-          -- Risque financier
-          SUM(CASE WHEN statut = 'annulee' THEN total ELSE 0 END) as ca_perdu_annulation,
-          ROUND(AVG(CASE WHEN statut = 'annulee' THEN total ELSE NULL END), 2) as valeur_moyenne_annulation
-          
-        FROM commandes
-        GROUP BY ville
-        HAVING COUNT(*) >= 5
-      ),
-      
-      performance_produit_risque AS (
-        SELECT 
-          nom_produit,
-          COUNT(*) as ventes_total,
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulations_produit,
-          ROUND(100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*), 2) as taux_annulation_produit,
-          ROUND(AVG(prix_unitaire), 2) as prix_moyen,
-          SUM(CASE WHEN statut = 'annulee' THEN sous_total ELSE 0 END) as ca_perdu_produit
-        FROM commandes
-        GROUP BY nom_produit
-        HAVING COUNT(*) >= 3
-      ),
-      
-      analyse_tendances_negatives AS (
-        SELECT 
-          DATE_TRUNC('week', date_creation) as semaine,
-          COUNT(*) as commandes_semaine,
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulations_semaine,
-          ROUND(100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*), 2) as taux_annulation_semaine,
-          SUM(total) as ca_semaine,
-          SUM(CASE WHEN statut = 'annulee' THEN total ELSE 0 END) as ca_perdu_semaine
-        FROM commandes
-        WHERE date_creation >= CURRENT_DATE - INTERVAL '8 weeks'
-        GROUP BY DATE_TRUNC('week', date_creation)
-        ORDER BY semaine
-      ),
-      
-      alertes_performance AS (
-        SELECT 
-          'Taux annulation élevé' as type_alerte,
-          ville as cible,
-          ROUND(100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*), 2) as valeur,
-          'Considérer une vérification supplémentaire pour cette ville' as recommandation
-        FROM commandes
-        GROUP BY ville
-        HAVING COUNT(*) >= 10 AND 100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*) > 20
-        
-        UNION ALL
-        
-        SELECT 
-          'Produit à fort taux d annulation' as type_alerte,
-          nom_produit as cible,
-          ROUND(100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*), 2) as valeur,
-          'Réévaluer la disponibilité ou la description du produit' as recommandation
-        FROM commandes
-        GROUP BY nom_produit
-        HAVING COUNT(*) >= 5 AND 100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*) > 15
-        
-        UNION ALL
-        
-        SELECT 
-          'Baisse de commandes hebdomadaire' as type_alerte,
-          'Global' as cible,
-          ROUND((LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('week', date_creation)) - COUNT(*)) * 100.0 / 
-                LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('week', date_creation)), 2) as valeur,
-          'Analyser les causes de la baisse d activité' as recommandation
-        FROM commandes
-        WHERE date_creation >= CURRENT_DATE - INTERVAL '4 weeks'
-        GROUP BY DATE_TRUNC('week', date_creation)
-        HAVING COUNT(*) < LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('week', date_creation)) * 0.8
-      )
-
-      SELECT 
-        (SELECT row_to_json(indicateurs_performance) FROM indicateurs_performance) as kpis_globaux,
-        (SELECT json_agg(row_to_json(analyse_risques)) FROM analyse_risques ORDER BY taux_annulation_ville DESC) as analyse_risques,
-        (SELECT json_agg(row_to_json(performance_produit_risque)) FROM performance_produit_risque ORDER BY taux_annulation_produit DESC) as risques_produits,
-        (SELECT json_agg(row_to_json(analyse_tendances_negatives)) FROM analyse_tendances_negatives) as tendances_negatives,
-        (SELECT json_agg(row_to_json(alertes_performance)) FROM alertes_performance) as alertes,
-        
-        -- Score de performance global
-        (
-          SELECT ROUND(
-            (100 - COALESCE(AVG(taux_annulation_ville), 0)) * 0.3 +
-            (commandes_par_jour / 10) * 0.3 +
-            (clients_uniques / 100) * 0.2 +
-            (villes_couvertes / 10) * 0.2, 2
-          )
-          FROM indicateurs_performance, 
-          (SELECT COALESCE(AVG(taux_annulation_ville), 0) as taux_annulation_ville FROM analyse_risques) as taux
-        ) as score_performance_global
-    `;
-
-    console.log('📋 Analyse performance et risques');
-
-    const result = await db.query(sql);
-    
-    res.json({
-      success: true,
-      data: result.rows[0] || {}
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur analyse performance:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message 
-    });
-  }
-});
-
-// 📊 RAPPORT SYNTHÈSE MENSUEL
-router.get('/analytique/rapport-mensuel', async (req, res) => {
-  try {
-    const { mois, annee } = req.query;
-    
-    const moisCible = mois || EXTRACT(MONTH FROM CURRENT_DATE);
-    const anneeCible = annee || EXTRACT(YEAR FROM CURRENT_DATE);
-
-    const sql = `
-      WITH donnees_mois AS (
-        SELECT 
-          -- Données du mois en cours
-          COUNT(*) as commandes_mois,
-          SUM(total) as ca_mois,
-          SUM(quantite) as maillots_vendus_mois,
-          COUNT(DISTINCT email) as nouveaux_clients_mois,
-          COUNT(DISTINCT ville) as nouvelles_villes_mois,
-          ROUND(AVG(total), 2) as panier_moyen_mois,
-          SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) as annulations_mois,
-          SUM(montant_promotion) as promotions_appliquees_mois,
-          
-          -- Données du mois précédent
-          LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('month', date_creation)) as commandes_mois_precedent,
-          LAG(SUM(total)) OVER (ORDER BY DATE_TRUNC('month', date_creation)) as ca_mois_precedent,
-          LAG(SUM(quantite)) OVER (ORDER BY DATE_TRUNC('month', date_creation)) as maillots_mois_precedent,
-          
-          -- Croissance
-          ROUND(
-            (COUNT(*) - LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('month', date_creation))) * 100.0 / 
-            NULLIF(LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('month', date_creation)), 0), 2
-          ) as croissance_commandes,
-          
-          ROUND(
-            (SUM(total) - LAG(SUM(total)) OVER (ORDER BY DATE_TRUNC('month', date_creation))) * 100.0 / 
-            NULLIF(LAG(SUM(total)) OVER (ORDER BY DATE_TRUNC('month', date_creation)), 0), 2
-          ) as croissance_ca
-          
-        FROM commandes
-        WHERE EXTRACT(MONTH FROM date_creation) IN (${moisCible}, ${moisCible} - 1)
-          AND EXTRACT(YEAR FROM date_creation) = ${anneeCible}
-        GROUP BY DATE_TRUNC('month', date_creation)
-        ORDER BY DATE_TRUNC('month', date_creation) DESC
-        LIMIT 2
-      ),
-      
-      top_elements_mois AS (
-        SELECT 
-          'top_produits' as categorie,
-          json_agg(json_build_object(
-            'nom', nom_produit,
-            'quantite', SUM(quantite),
-            'ca', SUM(sous_total),
-            'commandes', COUNT(*)
-          ) ORDER BY SUM(quantite) DESC LIMIT 5) as donnees
-        FROM commandes
-        WHERE EXTRACT(MONTH FROM date_creation) = ${moisCible}
-          AND EXTRACT(YEAR FROM date_creation) = ${anneeCible}
-        GROUP BY nom_produit
-        
-        UNION ALL
-        
-        SELECT 
-          'top_villes' as categorie,
-          json_agg(json_build_object(
-            'ville', ville,
-            'commandes', COUNT(*),
-            'ca', SUM(total),
-            'clients', COUNT(DISTINCT email)
-          ) ORDER BY COUNT(*) DESC LIMIT 5) as donnees
-        FROM commandes
-        WHERE EXTRACT(MONTH FROM date_creation) = ${moisCible}
-          AND EXTRACT(YEAR FROM date_creation) = ${anneeCible}
-        GROUP BY ville
-        
-        UNION ALL
-        
-        SELECT 
-          'top_clients' as categorie,
-          json_agg(json_build_object(
-            'client', nom_complet,
-            'email', email,
-            'commandes', COUNT(*),
-            'ca', SUM(total),
-            'ville', ville
-          ) ORDER BY SUM(total) DESC LIMIT 5) as donnees
-        FROM commandes
-        WHERE EXTRACT(MONTH FROM date_creation) = ${moisCible}
-          AND EXTRACT(YEAR FROM date_creation) = ${anneeCible}
-        GROUP BY nom_complet, email, ville
-      ),
-      
-      indicateurs_cles AS (
-        SELECT 
-          ROUND(100.0 * SUM(CASE WHEN statut = 'annulee' THEN 1 ELSE 0 END) / COUNT(*), 2) as taux_annulation_mois,
-          ROUND(SUM(total) / COUNT(DISTINCT email), 2) as valeur_vie_client_mois,
-          ROUND(SUM(frais_livraison) * 100.0 / SUM(total), 2) as pourcentage_frais_livraison,
-          ROUND(SUM(montant_promotion) * 100.0 / SUM(prix_original), 2) as pourcentage_promotions,
-          COUNT(DISTINCT taille) as nombre_tailles_vendues,
-          MODE() WITHIN GROUP (ORDER BY taille) as taille_plus_vendue
-        FROM commandes
-        WHERE EXTRACT(MONTH FROM date_creation) = ${moisCible}
-          AND EXTRACT(YEAR FROM date_creation) = ${anneeCible}
-      )
-
-      SELECT 
-        (SELECT row_to_json(d) FROM donnees_mois d LIMIT 1) as comparaison_mensuelle,
-        (SELECT json_object_agg(categorie, donnees) FROM top_elements_mois) as tops_mois,
-        (SELECT row_to_json(indicateurs_cles) FROM indicateurs_cles) as indicateurs_cles,
-        
-        -- Recommandations basées sur les données
-        ARRAY[
-          CASE 
-            WHEN (SELECT taux_annulation_mois FROM indicateurs_cles) > 15 
-            THEN 'Taux d annulation élevé - Investiguer les causes'
-            ELSE 'Taux d annulation acceptable'
-          END,
-          CASE 
-            WHEN (SELECT croissance_ca FROM donnees_mois LIMIT 1) < 0 
-            THEN 'Baisse du CA - Analyser les tendances négatives'
-            WHEN (SELECT croissance_ca FROM donnees_mois LIMIT 1) < 5 
-            THEN 'Croissance faible - Considérer des promotions'
-            ELSE 'Bonne croissance - Maintenir la stratégie'
-          END,
-          CASE 
-            WHEN (SELECT COUNT(*) FROM commandes WHERE promotion_appliquee = true 
-                  AND EXTRACT(MONTH FROM date_creation) = ${moisCible}) < 5 
-            THEN 'Peu de promotions utilisées - Évaluer leur efficacité'
-            ELSE 'Promotions bien utilisées'
+        -- Recommandations par ville
+        (SELECT json_agg(json_build_object(
+          'ville', zse.ville,
+          'type', 'Extension gamme',
+          'recommandation', 'Ajouter ' || (5 - zse.tailles_presentes) || ' tailles manquantes',
+          'priorite', CASE 
+            WHEN zse.couverture_tailles < 50 THEN 'Haute'
+            WHEN zse.couverture_tailles < 80 THEN 'Moyenne'
+            ELSE 'Basse'
           END
-        ] as recommandations
+        )) 
+        FROM zones_sous_exploitees zse 
+        WHERE zse.couverture_tailles < 100) as recommandations_tailles,
+        
+        -- Recommandations produits
+        (SELECT json_agg(json_build_object(
+          'ville', op.ville,
+          'produit_actuel', op.produit_actuel,
+          'produit_suggestion', op.produit_suggestion,
+          'type', 'Cross-selling',
+          'recommandation', 'Promouvoir ' || op.produit_suggestion || ' aux clients de ' || op.produit_actuel,
+          'priorite', CASE 
+            WHEN op.similarites >= 3 THEN 'Haute'
+            WHEN op.similarites >= 2 THEN 'Moyenne'
+            ELSE 'Basse'
+          END
+        )) 
+        FROM opportunites_produits op 
+        ORDER BY op.similarites DESC 
+        LIMIT 10) as recommandations_produits,
+        
+        -- Hotspots à renforcer
+        (SELECT json_agg(json_build_object(
+          'ville', h.ville,
+          'produit', h.nom_produit,
+          'taille', h.taille,
+          'clients', h.clients,
+          'type', 'Renforcement',
+          'recommandation', 'Augmenter le stock de ' || h.nom_produit || ' taille ' || h.taille || ' à ' || h.ville,
+          'priorite', CASE 
+            WHEN h.clients >= 5 THEN 'Haute'
+            WHEN h.clients >= 3 THEN 'Moyenne'
+            ELSE 'Basse'
+          END
+        )) 
+        FROM hotspots h 
+        WHERE h.clients >= 2 
+        ORDER BY h.ca DESC 
+        LIMIT 10) as recommandations_stocks
     `;
 
-    console.log(`📋 Rapport mensuel ${moisCible}/${anneeCible}`);
+    console.log('📋 Génération de recommandations stratégiques');
 
     const result = await db.query(sql);
     
     res.json({
       success: true,
-      mois: moisCible,
-      annee: anneeCible,
       data: result.rows[0] || {}
     });
 
   } catch (error) {
-    console.error('❌ Erreur rapport mensuel:', error);
+    console.error('❌ Erreur génération recommandations:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur interne du serveur',
