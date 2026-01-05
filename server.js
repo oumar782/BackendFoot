@@ -16,6 +16,9 @@ import demo from './Gestion/demonstration.js';
 import prev from './Gestion/prev.js';
 import Prevan from './Gestion/prevann.js';
 import Commande from './Gestion/commande.js';
+import Annalyse from './Gestion/Annalyse-financiere.js';
+
+
 
 dotenv.config();
 const app = express();
@@ -63,6 +66,7 @@ app.use('/api/prevision', prev);
 app.use('/api/calendriers', CalendriersRouter);
 app.use('/api/prevannule', Prevan);
 app.use('/api/commande', Commande);
+app.use('/api/annalyse', Annalyse);
 
 // 🏥 Health check endpoint amélioré
 app.get('/api/health', async (req, res) => {
