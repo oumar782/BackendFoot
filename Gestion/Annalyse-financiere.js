@@ -21,7 +21,7 @@ router.get('/analyse-mensuelle', async (req, res) => {
         SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_totales,
         COUNT(DISTINCT numeroterrain) as terrains_utilises,
         COUNT(DISTINCT email) as clients_uniques,
-        ROUND(AVG(tarif / NULLIF(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600, 0)), 2) as tarif_horaire_moyen
+        ROUND((AVG(tarif / NULLIF(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600, 0)))::numeric, 2) as tarif_horaire_moyen
       FROM reservation
       WHERE statut IN ('confirmée', 'payé', 'terminée')
         AND EXTRACT(YEAR FROM datereservation) = $1
@@ -123,7 +123,7 @@ router.get('/analyse-hebdomadaire', async (req, res) => {
         AVG(tarif) as tarif_moyen,
         COUNT(DISTINCT numeroterrain) as terrains_utilises,
         COUNT(DISTINCT email) as clients_uniques,
-        ROUND(SUM(tarif) / NULLIF(COUNT(DISTINCT DATE(datereservation)), 0), 2) as ca_moyen_journalier
+        ROUND((SUM(tarif) / NULLIF(COUNT(DISTINCT DATE(datereservation)), 0))::numeric, 2) as ca_moyen_journalier
       FROM reservation
       ${whereClause}
       GROUP BY 
@@ -141,7 +141,7 @@ router.get('/analyse-hebdomadaire', async (req, res) => {
         COUNT(*) as nombre_reservations,
         SUM(tarif) as chiffre_affaires,
         AVG(tarif) as tarif_moyen,
-        ROUND(AVG(tarif), 2) as tarif_moyen_jour
+        ROUND((AVG(tarif))::numeric, 2) as tarif_moyen_jour
       FROM reservation
       ${whereClause}
       GROUP BY EXTRACT(DOW FROM datereservation), TO_CHAR(datereservation, 'Day')
@@ -205,7 +205,7 @@ router.get('/analyse-journaliere', async (req, res) => {
         COUNT(DISTINCT email) as clients_uniques,
         STRING_AGG(DISTINCT typeterrain, ', ') as types_terrains,
         STRING_AGG(DISTINCT nomterrain, ', ') as noms_terrains,
-        ROUND(SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0), 2) as tarif_horaire_moyen
+        ROUND((SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0))::numeric, 2) as tarif_horaire_moyen
       FROM reservation
       ${whereClause}
       GROUP BY datereservation
@@ -219,7 +219,7 @@ router.get('/analyse-journaliere', async (req, res) => {
         COUNT(*) as nombre_reservations,
         SUM(tarif) as chiffre_affaires,
         AVG(tarif) as tarif_moyen,
-        ROUND(AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 2) as duree_moyenne_heures
+        ROUND((AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600))::numeric, 2) as duree_moyenne_heures
       FROM reservation
       ${whereClause}
       GROUP BY EXTRACT(HOUR FROM heurereservation)
@@ -429,7 +429,7 @@ router.get('/tableau-de-bord-financier', async (req, res) => {
           AVG(tarif) as tarif_moyen_mois,
           COUNT(DISTINCT email) as clients_mois,
           COUNT(DISTINCT numeroterrain) as terrains_mois,
-          ROUND(SUM(tarif) / NULLIF(COUNT(DISTINCT DATE(datereservation)), 0), 2) as ca_journalier_moyen
+          ROUND((SUM(tarif) / NULLIF(COUNT(DISTINCT DATE(datereservation)), 0))::numeric, 2) as ca_journalier_moyen
         FROM reservation
         WHERE statut IN ('confirmée', 'payé', 'terminée')
           AND EXTRACT(MONTH FROM datereservation) = EXTRACT(MONTH FROM CURRENT_DATE)
@@ -470,8 +470,8 @@ router.get('/tableau-de-bord-financier', async (req, res) => {
           typeterrain,
           COUNT(*) as reservations,
           SUM(tarif) as chiffre_affaires,
-          ROUND(AVG(tarif), 2) as tarif_moyen,
-          ROUND(SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0), 2) as tarif_horaire_moyen
+          ROUND((AVG(tarif))::numeric, 2) as tarif_moyen,
+          ROUND((SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0))::numeric, 2) as tarif_horaire_moyen
         FROM reservation
         WHERE statut IN ('confirmée', 'payé', 'terminée')
           AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
@@ -488,7 +488,7 @@ router.get('/tableau-de-bord-financier', async (req, res) => {
           prenom,
           COUNT(*) as reservations,
           SUM(tarif) as total_depense,
-          ROUND(AVG(tarif), 2) as depense_moyenne,
+          ROUND((AVG(tarif))::numeric, 2) as depense_moyenne,
           MAX(datereservation) as derniere_reservation
         FROM reservation
         WHERE statut IN ('confirmée', 'payé', 'terminée')
@@ -590,9 +590,9 @@ router.get('/analyse-par-type-terrain', async (req, res) => {
         SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_totales,
         COUNT(DISTINCT numeroterrain) as nombre_terrains,
         COUNT(DISTINCT email) as clients_uniques,
-        ROUND(SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0), 2) as tarif_horaire_moyen,
-        ROUND(AVG(tarif) / NULLIF(AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0), 2) as valeur_horaire_moyenne,
-        ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) as pourcentage_reservations
+        ROUND((SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0))::numeric, 2) as tarif_horaire_moyen,
+        ROUND((AVG(tarif) / NULLIF(AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0))::numeric, 2) as valeur_horaire_moyenne,
+        ROUND((COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (), 0))::numeric, 2) as pourcentage_reservations
       FROM reservation
       WHERE statut IN ('confirmée', 'payé', 'terminée')
         AND datereservation >= CURRENT_DATE - INTERVAL '${periode} days'
@@ -663,10 +663,10 @@ router.get('/previsions-financieres', async (req, res) => {
       SELECT 
         EXTRACT(DOW FROM datereservation) as jour_numero,
         TO_CHAR(datereservation, 'Day') as jour_nom,
-        AVG(count_daily) as reservations_moyennes,
-        AVG(ca_daily) as ca_moyen,
-        STDDEV(count_daily) as reservations_ecart_type,
-        STDDEV(ca_daily) as ca_ecart_type
+        AVG(count_daily)::numeric as reservations_moyennes,
+        AVG(ca_daily)::numeric as ca_moyen,
+        STDDEV(count_daily)::numeric as reservations_ecart_type,
+        STDDEV(ca_daily)::numeric as ca_ecart_type
       FROM (
         SELECT 
           datereservation,
@@ -696,15 +696,15 @@ router.get('/previsions-financieres', async (req, res) => {
       
       if (statsJour) {
         // Ajouter une variation aléatoire basée sur l'écart-type
-        const variationReservations = Math.random() * parseFloat(statsJour.reservations_ecart_type);
-        const variationCA = Math.random() * parseFloat(statsJour.ca_ecart_type);
+        const variationReservations = Math.random() * parseFloat(statsJour.reservations_ecart_type || 0);
+        const variationCA = Math.random() * parseFloat(statsJour.ca_ecart_type || 0);
         
         const reservationsPrevues = Math.max(0, 
-          parseFloat(statsJour.reservations_moyennes) + variationReservations
+          parseFloat(statsJour.reservations_moyennes || 0) + variationReservations
         );
         
         const caPrevu = Math.max(0, 
-          parseFloat(statsJour.ca_moyen) + variationCA
+          parseFloat(statsJour.ca_moyen || 0) + variationCA
         );
 
         previsions.push({
