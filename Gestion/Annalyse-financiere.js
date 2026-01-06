@@ -1,4 +1,5 @@
 // 📊 Analyse financière mensuelle avec comparaison année précédente
+// 📊 Analyse financière mensuelle avec comparaison année précédente
 router.get('/analyse-mensuelle', async (req, res) => {
   try {
     const { annee } = req.query;
