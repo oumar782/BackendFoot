@@ -1,3 +1,8 @@
+import { Router } from 'express';
+import db from '../db.js'; // Assurez-vous que ce chemin correspond à votre configuration
+
+const router = Router();
+
 // ============================================
 // FONCTIONS UTILITAIRES
 // ============================================
@@ -152,6 +157,25 @@ function calculerVLCMoyenne(cohortes) {
   return vlcs.reduce((a, b) => a + b, 0) / vlcs.length;
 }
 
+function calculerConcentration(clients, top) {
+  const caTotal = clients.reduce((sum, c) => sum + parseFloat(c.ca_total), 0);
+  const caTopN = clients.slice(0, top).reduce((sum, c) => sum + parseFloat(c.ca_total), 0);
+  return ((caTopN / caTotal) * 100).toFixed(2);
+}
+
+function calculerTauxActifs(clients) {
+  const actifs = clients.filter(c => parseInt(c.recence_jours) <= 30).length;
+  return ((actifs / clients.length) * 100).toFixed(2);
+}
+
+function interpreterElasticite(correlation) {
+  if (correlation < -0.5) return 'Forte élasticité négative - Baisse de prix augmente fortement le volume';
+  if (correlation < -0.2) return 'Élasticité négative modérée';
+  if (correlation < 0.2) return 'Inélastique - Prix peu impact sur volume';
+  if (correlation < 0.5) return 'Élasticité positive modérée - Prix premium accepté';
+  return 'Forte élasticité positive - Prix élevé n\'impacte pas négativement';
+}
+
 // ============================================
 // 📊 ANALYSES AVANCÉES SUPPLÉMENTAIRES
 // ============================================
@@ -247,17 +271,6 @@ router.get('/analyse-qualite-portefeuille', async (req, res) => {
   }
 });
 
-function calculerConcentration(clients, top) {
-  const caTotal = clients.reduce((sum, c) => sum + parseFloat(c.ca_total), 0);
-  const caTopN = clients.slice(0, top).reduce((sum, c) => sum + parseFloat(c.ca_total), 0);
-  return ((caTopN / caTotal) * 100).toFixed(2);
-}
-
-function calculerTauxActifs(clients) {
-  const actifs = clients.filter(c => parseInt(c.recence_jours) <= 30).length;
-  return ((actifs / clients.length) * 100).toFixed(2);
-}
-
 // 📊 Analyse de l'élasticité des prix
 router.get('/analyse-elasticite-prix', async (req, res) => {
   try {
@@ -303,14 +316,6 @@ router.get('/analyse-elasticite-prix', async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
-function interpreterElasticite(correlation) {
-  if (correlation < -0.5) return 'Forte élasticité négative - Baisse de prix augmente fortement le volume';
-  if (correlation < -0.2) return 'Élasticité négative modérée';
-  if (correlation < 0.2) return 'Inélastique - Prix peu impact sur volume';
-  if (correlation < 0.5) return 'Élasticité positive modérée - Prix premium accepté';
-  return 'Forte élasticité positive - Prix élevé n\'impacte pas négativement';
-}
 
 // 📊 Tableau de bord exécutif complet
 router.get('/tableau-bord-executif', async (req, res) => {
@@ -439,6 +444,293 @@ router.get('/tableau-bord-executif', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur tableau de bord exécutif:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============================================
+// ROUTES PRINCIPALES D'ANALYSE FINANCIÈRE
+// ============================================
+
+// 📈 Analyse financière par mois
+router.get('/analyse-mensuelle/:annee?', async (req, res) => {
+  try {
+    const annee = req.params.annee || new Date().getFullYear();
+    
+    const result = await db.query(`
+      SELECT 
+        DATE_TRUNC('month', datereservation) as periode,
+        TO_CHAR(DATE_TRUNC('month', datereservation), 'YYYY-MM') as periode_affichage,
+        COUNT(*) as nombre_reservations,
+        SUM(tarif) as chiffre_affaires,
+        AVG(tarif) as tarif_moyen,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tarif) as tarif_median,
+        MIN(tarif) as tarif_min,
+        MAX(tarif) as tarif_max,
+        SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_totales,
+        AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as duree_moyenne,
+        COUNT(DISTINCT numeroterrain) as terrains_utilises,
+        COUNT(DISTINCT email) as clients_uniques,
+        COUNT(DISTINCT DATE(datereservation)) as jours_actifs,
+        SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) as tarif_horaire_moyen,
+        COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%foot%' THEN email END) as clients_football,
+        SUM(CASE WHEN typeterrain ILIKE '%foot%' THEN tarif ELSE 0 END) as ca_football,
+        COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%basket%' THEN email END) as clients_basketball,
+        SUM(CASE WHEN typeterrain ILIKE '%basket%' THEN tarif ELSE 0 END) as ca_basketball,
+        COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%tennis%' THEN email END) as clients_tennis,
+        SUM(CASE WHEN typeterrain ILIKE '%tennis%' THEN tarif ELSE 0 END) as ca_tennis
+      FROM reservation
+      WHERE statut IN ('confirmée', 'payé', 'terminée')
+        AND EXTRACT(YEAR FROM datereservation) = $1
+      GROUP BY DATE_TRUNC('month', datereservation)
+      ORDER BY periode ASC
+    `, [annee]);
+
+    const donneesFormatees = result.rows.map(row => formatterDonneesMois(row));
+    const tendance = analyserTendance(donneesFormatees);
+
+    res.json({
+      success: true,
+      annee: annee,
+      donnees: donneesFormatees,
+      analyses: {
+        tendance: tendance,
+        resume_annuel: {
+          ca_total: donneesFormatees.reduce((sum, mois) => sum + mois.chiffre_affaires, 0),
+          reservations_total: donneesFormatees.reduce((sum, mois) => sum + mois.nombre_reservations, 0),
+          clients_total: donneesFormatees.reduce((sum, mois) => sum + mois.clients_uniques, 0),
+          meilleur_mois: donneesFormatees.reduce((max, mois) => 
+            mois.chiffre_affaires > max.chiffre_affaires ? mois : max
+          , { chiffre_affaires: 0 })
+        }
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur analyse mensuelle:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📊 Analyse par terrain
+router.get('/analyse-par-terrain', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        t.numeroterrain,
+        t.nomterrain,
+        t.typeterrain,
+        COUNT(r.id) as nombre_reservations,
+        SUM(r.tarif) as chiffre_affaires,
+        AVG(r.tarif) as tarif_moyen,
+        SUM(EXTRACT(EPOCH FROM (r.heurefin - r.heurereservation))/3600) as heures_utilisees,
+        COUNT(DISTINCT r.email) as clients_uniques,
+        COUNT(DISTINCT DATE(r.datereservation)) as jours_actifs,
+        (SUM(EXTRACT(EPOCH FROM (r.heurefin - r.heurereservation))/3600) / (24 * 30)) * 100 as taux_occupation,
+        AVG(EXTRACT(EPOCH FROM (r.heurefin - r.heurereservation))/3600) as duree_moyenne,
+        MIN(r.tarif) as tarif_min,
+        MAX(r.tarif) as tarif_max,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY r.tarif) as tarif_median,
+        t.tarifhoraire as tarif_horaire_standard
+      FROM terrain t
+      LEFT JOIN reservation r ON t.numeroterrain = r.numeroterrain 
+        AND r.statut IN ('confirmée', 'payé', 'terminée')
+        AND r.datereservation >= CURRENT_DATE - INTERVAL '90 days'
+      GROUP BY t.numeroterrain, t.nomterrain, t.typeterrain, t.tarifhoraire
+      ORDER BY chiffre_affaires DESC NULLS LAST
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows.map(row => ({
+        ...row,
+        nombre_reservations: parseInt(row.nombre_reservations || 0),
+        chiffre_affaires: parseFloat(row.chiffre_affaires || 0),
+        tarif_moyen: parseFloat(row.tarif_moyen || 0),
+        heures_utilisees: parseFloat(row.heures_utilisees || 0),
+        clients_uniques: parseInt(row.clients_uniques || 0),
+        jours_actifs: parseInt(row.jours_actifs || 0),
+        taux_occupation: parseFloat(row.taux_occupation || 0),
+        duree_moyenne: parseFloat(row.duree_moyenne || 0),
+        tarif_min: parseFloat(row.tarif_min || 0),
+        tarif_max: parseFloat(row.tarif_max || 0),
+        tarif_median: parseFloat(row.tarif_median || 0),
+        tarif_horaire_standard: parseFloat(row.tarif_horaire_standard || 0),
+        revenu_par_heure: parseFloat(row.chiffre_affaires || 0) / parseFloat(row.heures_utilisees || 1),
+        rentabilite: parseFloat(row.chiffre_affaires || 0) > 0 ? 
+          (parseFloat(row.chiffre_affaires || 0) / (parseFloat(row.heures_utilisees || 0) * parseFloat(row.tarif_horaire_standard || 1)) * 100).toFixed(2) : 0
+      }))
+    });
+  } catch (error) {
+    console.error('❌ Erreur analyse par terrain:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📈 Prévisions financières
+router.get('/previsions', async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        EXTRACT(YEAR FROM datereservation) as annee,
+        SUM(tarif) as chiffre_affaires
+      FROM reservation
+      WHERE statut IN ('confirmée', 'payé', 'terminée')
+      GROUP BY EXTRACT(YEAR FROM datereservation)
+      ORDER BY annee ASC
+    `);
+
+    if (result.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Données insuffisantes pour les prévisions',
+        donnees: []
+      });
+    }
+
+    const derniereAnnee = Math.max(...result.rows.map(r => parseInt(r.annee)));
+    const prochaineAnnee = derniereAnnee + 1;
+    
+    const prevision = prevoir(result.rows, prochaineAnnee);
+
+    res.json({
+      success: true,
+      donnees_historiques: result.rows.map(r => ({
+        annee: parseInt(r.annee),
+        chiffre_affaires: parseFloat(r.chiffre_affaires)
+      })),
+      previsions: prevision ? [prevision] : [],
+      analyse_tendance: analyserTendance(result.rows.map(r => ({
+        chiffre_affaires: parseFloat(r.chiffre_affaires)
+      })))
+    });
+  } catch (error) {
+    console.error('❌ Erreur prévisions:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 👥 Analyse de cohorte clients
+router.get('/analyse-cohortes', async (req, res) => {
+  try {
+    const result = await db.query(`
+      WITH premier_achat AS (
+        SELECT 
+          email,
+          MIN(DATE_TRUNC('month', datereservation)) as premier_mois
+        FROM reservation
+        WHERE statut IN ('confirmée', 'payé', 'terminée')
+        GROUP BY email
+      ),
+      reservations_par_mois AS (
+        SELECT 
+          email,
+          DATE_TRUNC('month', datereservation) as mois,
+          COUNT(*) as nb_reservations,
+          SUM(tarif) as ca_mois
+        FROM reservation
+        WHERE statut IN ('confirmée', 'payé', 'terminée')
+        GROUP BY email, DATE_TRUNC('month', datereservation)
+      ),
+      cohortes AS (
+        SELECT 
+          DATE_TRUNC('month', premier_mois) as cohorte_mois,
+          COUNT(DISTINCT email) as cohorte_size,
+          -- Retentions par mois
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois) 
+            THEN email 
+          END) as mois_0,
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois + INTERVAL '1 month')
+            THEN email 
+          END) as mois_1,
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois + INTERVAL '2 months')
+            THEN email 
+          END) as mois_2,
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois + INTERVAL '3 months')
+            THEN email 
+          END) as mois_3,
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois + INTERVAL '4 months')
+            THEN email 
+          END) as mois_4,
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois + INTERVAL '5 months')
+            THEN email 
+          END) as mois_5,
+          COUNT(DISTINCT CASE 
+            WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois + INTERVAL '6 months')
+            THEN email 
+          END) as mois_6
+        FROM premier_achat pa
+        LEFT JOIN reservations_par_mois rpm ON pa.email = rpm.email
+        WHERE premier_mois >= CURRENT_DATE - INTERVAL '12 months'
+        GROUP BY DATE_TRUNC('month', premier_mois)
+      )
+      SELECT 
+        cohorte_mois,
+        cohorte_size,
+        mois_0,
+        mois_1,
+        mois_2,
+        mois_3,
+        mois_4,
+        mois_5,
+        mois_6,
+        ROUND((mois_1::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_1,
+        ROUND((mois_2::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_2,
+        ROUND((mois_3::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_3,
+        ROUND((mois_4::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_4,
+        ROUND((mois_5::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_5,
+        ROUND((mois_6::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_6
+      FROM cohortes
+      ORDER BY cohorte_mois DESC
+    `);
+
+    const cohortesAvecCalculs = result.rows.map(cohorte => {
+      const tauxRetention = {
+        mois_1: parseFloat(cohorte.retention_mois_1 || 0),
+        mois_2: parseFloat(cohorte.retention_mois_2 || 0),
+        mois_3: parseFloat(cohorte.retention_mois_3 || 0),
+        mois_4: parseFloat(cohorte.retention_mois_4 || 0),
+        mois_5: parseFloat(cohorte.retention_mois_5 || 0),
+        mois_6: parseFloat(cohorte.retention_mois_6 || 0)
+      };
+
+      // Calcul CLV (Customer Lifetime Value) simplifié
+      const caMoyenParMois = 100; // À remplacer par votre calcul réel
+      const vieClientMois = Object.values(tauxRetention).reduce((a, b) => a + b, 0) / 100;
+      const clv = caMoyenParMois * vieClientMois;
+
+      return {
+        cohorte_mois: cohorte.cohorte_mois,
+        taille_cohorte: parseInt(cohorte.cohorte_size),
+        taux_retention: tauxRetention,
+        valeur_vie_client: {
+          ca_moyen_mensuel: caMoyenParMois,
+          duree_vie_moyenne_mois: vieClientMois.toFixed(2),
+          valeur_totale: clv.toFixed(2),
+          cumule: parseFloat(clv.toFixed(2))
+        }
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        cohortes: cohortesAvecCalculs,
+        indicateurs: {
+          retention_moyenne: calculerRetentionMoyenne(cohortesAvecCalculs),
+          valeur_vie_client_moyenne: calculerVLCMoyenne(cohortesAvecCalculs),
+          taux_attrition_moyen: ((100 - (cohortesAvecCalculs.reduce((sum, c) => 
+            sum + c.taux_retention.mois_6, 0) / cohortesAvecCalculs.length)).toFixed(2))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur analyse cohortes:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
