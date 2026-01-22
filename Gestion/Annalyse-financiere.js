@@ -452,10 +452,69 @@ router.get('/tableau-bord-executif', async (req, res) => {
 // ROUTES PRINCIPALES D'ANALYSE FINANCIÈRE
 // ============================================
 
-// 📈 Analyse financière par mois
-router.get('/analyse-mensuelle/:annee?', async (req, res) => {
+// 📈 Analyse financière par mois (version corrigée sans paramètre optionnel)
+router.get('/analyse-mensuelle/:annee', async (req, res) => {
   try {
-    const annee = req.params.annee || new Date().getFullYear();
+    const annee = req.params.annee;
+    
+    const result = await db.query(`
+      SELECT 
+        DATE_TRUNC('month', datereservation) as periode,
+        TO_CHAR(DATE_TRUNC('month', datereservation), 'YYYY-MM') as periode_affichage,
+        COUNT(*) as nombre_reservations,
+        SUM(tarif) as chiffre_affaires,
+        AVG(tarif) as tarif_moyen,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tarif) as tarif_median,
+        MIN(tarif) as tarif_min,
+        MAX(tarif) as tarif_max,
+        SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_totales,
+        AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as duree_moyenne,
+        COUNT(DISTINCT numeroterrain) as terrains_utilises,
+        COUNT(DISTINCT email) as clients_uniques,
+        COUNT(DISTINCT DATE(datereservation)) as jours_actifs,
+        SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) as tarif_horaire_moyen,
+        COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%foot%' THEN email END) as clients_football,
+        SUM(CASE WHEN typeterrain ILIKE '%foot%' THEN tarif ELSE 0 END) as ca_football,
+        COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%basket%' THEN email END) as clients_basketball,
+        SUM(CASE WHEN typeterrain ILIKE '%basket%' THEN tarif ELSE 0 END) as ca_basketball,
+        COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%tennis%' THEN email END) as clients_tennis,
+        SUM(CASE WHEN typeterrain ILIKE '%tennis%' THEN tarif ELSE 0 END) as ca_tennis
+      FROM reservation
+      WHERE statut IN ('confirmée', 'payé', 'terminée')
+        AND EXTRACT(YEAR FROM datereservation) = $1
+      GROUP BY DATE_TRUNC('month', datereservation)
+      ORDER BY periode ASC
+    `, [annee]);
+
+    const donneesFormatees = result.rows.map(row => formatterDonneesMois(row));
+    const tendance = analyserTendance(donneesFormatees);
+
+    res.json({
+      success: true,
+      annee: annee,
+      donnees: donneesFormatees,
+      analyses: {
+        tendance: tendance,
+        resume_annuel: {
+          ca_total: donneesFormatees.reduce((sum, mois) => sum + mois.chiffre_affaires, 0),
+          reservations_total: donneesFormatees.reduce((sum, mois) => sum + mois.nombre_reservations, 0),
+          clients_total: donneesFormatees.reduce((sum, mois) => sum + mois.clients_uniques, 0),
+          meilleur_mois: donneesFormatees.reduce((max, mois) => 
+            mois.chiffre_affaires > max.chiffre_affaires ? mois : max
+          , { chiffre_affaires: 0 })
+        }
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur analyse mensuelle:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📈 Analyse financière par mois (année courante par défaut)
+router.get('/analyse-mensuelle', async (req, res) => {
+  try {
+    const annee = new Date().getFullYear();
     
     const result = await db.query(`
       SELECT 
@@ -733,6 +792,25 @@ router.get('/analyse-cohortes', async (req, res) => {
     console.error('❌ Erreur analyse cohortes:', error);
     res.status(500).json({ success: false, message: error.message });
   }
+});
+
+// Route de test pour vérifier que l'API fonctionne
+router.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'API d\'analyse financière fonctionnelle',
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      '/analyse-qualite-portefeuille',
+      '/analyse-elasticite-prix',
+      '/tableau-bord-executif',
+      '/analyse-mensuelle',
+      '/analyse-mensuelle/:annee',
+      '/analyse-par-terrain',
+      '/previsions',
+      '/analyse-cohortes'
+    ]
+  });
 });
 
 export default router;
