@@ -1,10 +1,10 @@
 import { Router } from 'express';
-import db from '../db.js'; // Assurez-vous que ce chemin correspond à votre configuration
+import db from '../db.js';
 
 const router = Router();
 
 // ============================================
-// FONCTIONS UTILITAIRES
+// FONCTIONS UTILITAIRES (restent identiques)
 // ============================================
 
 function calculerEvolution(valeurCourante, valeurReference) {
@@ -99,7 +99,6 @@ function calculerEcartType(tableau) {
 function prevoir(donnees, anneeCible) {
   if (donnees.length < 2) return null;
   
-  // Régression linéaire simple
   const x = donnees.map((d, i) => i);
   const y = donnees.map(d => parseFloat(d.chiffre_affaires));
   
@@ -158,13 +157,15 @@ function calculerVLCMoyenne(cohortes) {
 }
 
 function calculerConcentration(clients, top) {
-  const caTotal = clients.reduce((sum, c) => sum + parseFloat(c.ca_total), 0);
-  const caTopN = clients.slice(0, top).reduce((sum, c) => sum + parseFloat(c.ca_total), 0);
+  if (clients.length === 0) return "0.00";
+  const caTotal = clients.reduce((sum, c) => sum + parseFloat(c.ca_total || 0), 0);
+  const caTopN = clients.slice(0, Math.min(top, clients.length)).reduce((sum, c) => sum + parseFloat(c.ca_total || 0), 0);
   return ((caTopN / caTotal) * 100).toFixed(2);
 }
 
 function calculerTauxActifs(clients) {
-  const actifs = clients.filter(c => parseInt(c.recence_jours) <= 30).length;
+  if (clients.length === 0) return "0.00";
+  const actifs = clients.filter(c => parseInt(c.recence_jours || 999) <= 30).length;
   return ((actifs / clients.length) * 100).toFixed(2);
 }
 
@@ -194,8 +195,7 @@ router.get('/analyse-qualite-portefeuille', async (req, res) => {
           AVG(tarif) as panier_moyen,
           MAX(datereservation) - MIN(datereservation) as anciennete_jours,
           CURRENT_DATE - MAX(datereservation) as recence_jours,
-          COUNT(DISTINCT DATE_TRUNC('month', datereservation)) as nb_mois_actifs,
-          STDDEV(tarif) as volatilite_panier
+          COUNT(DISTINCT DATE_TRUNC('month', datereservation)) as nb_mois_actifs
         FROM reservation
         WHERE statut IN ('confirmée', 'payé', 'terminée')
         AND datereservation >= CURRENT_DATE - INTERVAL '365 days'
@@ -203,7 +203,7 @@ router.get('/analyse-qualite-portefeuille', async (req, res) => {
       )
       SELECT 
         *,
-        -- Score RFM (Récence, Fréquence, Montant)
+        -- Score RFM
         NTILE(5) OVER (ORDER BY recence_jours DESC) as score_recence,
         NTILE(5) OVER (ORDER BY nb_reservations) as score_frequence,
         NTILE(5) OVER (ORDER BY ca_total) as score_montant,
@@ -234,15 +234,16 @@ router.get('/analyse-qualite-portefeuille', async (req, res) => {
         };
       }
       acc[cat].count++;
-      acc[cat].ca_total += parseFloat(client.ca_total);
-      acc[cat].nb_reservations_total += parseInt(client.nb_reservations);
+      acc[cat].ca_total += parseFloat(client.ca_total || 0);
+      acc[cat].nb_reservations_total += parseInt(client.nb_reservations || 0);
       return acc;
     }, {});
 
     Object.keys(distribution).forEach(cat => {
-      distribution[cat].ca_moyen = distribution[cat].ca_total / distribution[cat].count;
-      distribution[cat].part_clients = (distribution[cat].count / result.rows.length * 100).toFixed(2);
-      distribution[cat].part_ca = (distribution[cat].ca_total / result.rows.reduce((sum, c) => sum + parseFloat(c.ca_total), 0) * 100).toFixed(2);
+      distribution[cat].ca_moyen = distribution[cat].count > 0 ? distribution[cat].ca_total / distribution[cat].count : 0;
+      distribution[cat].part_clients = result.rows.length > 0 ? (distribution[cat].count / result.rows.length * 100).toFixed(2) : "0.00";
+      const totalCA = result.rows.reduce((sum, c) => sum + parseFloat(c.ca_total || 0), 0);
+      distribution[cat].part_ca = totalCA > 0 ? (distribution[cat].ca_total / totalCA * 100).toFixed(2) : "0.00";
     });
 
     res.json({
@@ -254,14 +255,16 @@ router.get('/analyse-qualite-portefeuille', async (req, res) => {
           panier_moyen: parseFloat(c.panier_moyen || 0),
           ca_mensuel_moyen: parseFloat(c.ca_mensuel_moyen || 0),
           ca_annuel_projete: parseFloat(c.ca_annuel_projete || 0),
-          volatilite_panier: parseFloat(c.volatilite_panier || 0)
+          nb_reservations: parseInt(c.nb_reservations || 0),
+          recence_jours: parseInt(c.recence_jours || 0),
+          anciennete_jours: parseInt(c.anciennete_jours || 0)
         })),
         distribution_fidelite: distribution,
         indicateurs_portefeuille: {
           concentration_top10: calculerConcentration(result.rows, 10),
           concentration_top20: calculerConcentration(result.rows, 20),
           taux_clients_actifs: calculerTauxActifs(result.rows),
-          valeur_portefeuille_totale: result.rows.reduce((sum, c) => sum + parseFloat(c.ca_total), 0)
+          valeur_portefeuille_totale: result.rows.reduce((sum, c) => sum + parseFloat(c.ca_total || 0), 0)
         }
       }
     });
@@ -292,9 +295,7 @@ router.get('/analyse-elasticite-prix', async (req, res) => {
         typeterrain,
         CORR(prix_moyen, volume) as correlation_prix_volume,
         AVG(prix_moyen) as prix_moyen_global,
-        STDDEV(prix_moyen) as volatilite_prix,
-        AVG(volume) as volume_moyen,
-        STDDEV(volume) as volatilite_volume
+        AVG(volume) as volume_moyen
       FROM prix_volume
       GROUP BY typeterrain
     `);
@@ -302,12 +303,10 @@ router.get('/analyse-elasticite-prix', async (req, res) => {
     res.json({
       success: true,
       data: result.rows.map(r => ({
-        ...r,
+        typeterrain: r.typeterrain,
         correlation_prix_volume: parseFloat(r.correlation_prix_volume || 0),
         prix_moyen_global: parseFloat(r.prix_moyen_global || 0),
-        volatilite_prix: parseFloat(r.volatilite_prix || 0),
         volume_moyen: parseFloat(r.volume_moyen || 0),
-        volatilite_volume: parseFloat(r.volatilite_volume || 0),
         interpretation: interpreterElasticite(parseFloat(r.correlation_prix_volume || 0))
       }))
     });
@@ -347,10 +346,7 @@ router.get('/tableau-bord-executif', async (req, res) => {
           SELECT 
             SUM(tarif) as ca_realise,
             COUNT(*) as reservations_realisees,
-            COUNT(DISTINCT CASE 
-              WHEN datereservation >= CURRENT_DATE - INTERVAL '30 days' 
-              THEN email 
-            END) as nouveaux_clients
+            COUNT(DISTINCT email) as nouveaux_clients
           FROM reservation
           WHERE statut IN ('confirmée', 'payé', 'terminée')
           AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
@@ -361,7 +357,8 @@ router.get('/tableau-bord-executif', async (req, res) => {
           (r.ca_realise / o.objectif_ca_mensuel * 100) as taux_realisation_ca,
           o.objectif_reservations_mensuelles,
           r.reservations_realisees,
-          (r.reservations_realisees / o.objectif_reservations_mensuelles * 100) as taux_realisation_reservations
+          (r.reservations_realisees / o.objectif_reservations_mensuelles * 100) as taux_realisation_reservations,
+          r.nouveaux_clients
         FROM objectifs o, realisations r
       `),
       
@@ -383,11 +380,19 @@ router.get('/tableau-bord-executif', async (req, res) => {
           AND DATE_TRUNC('month', datereservation) = DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 year')
         )
         SELECT 
-          mc.ca as ca_mois_courant,
-          mp.ca as ca_mois_precedent,
-          ap.ca as ca_meme_mois_n1,
-          (mc.ca - mp.ca) / NULLIF(mp.ca, 0) * 100 as croissance_mom,
-          (mc.ca - ap.ca) / NULLIF(ap.ca, 0) * 100 as croissance_yoy
+          COALESCE(mc.ca, 0) as ca_mois_courant,
+          COALESCE(mp.ca, 0) as ca_mois_precedent,
+          COALESCE(ap.ca, 0) as ca_meme_mois_n1,
+          CASE 
+            WHEN COALESCE(mp.ca, 0) > 0 
+            THEN ((COALESCE(mc.ca, 0) - COALESCE(mp.ca, 0)) / COALESCE(mp.ca, 0) * 100)
+            ELSE 0 
+          END as croissance_mom,
+          CASE 
+            WHEN COALESCE(ap.ca, 0) > 0 
+            THEN ((COALESCE(mc.ca, 0) - COALESCE(ap.ca, 0)) / COALESCE(ap.ca, 0) * 100)
+            ELSE 0 
+          END as croissance_yoy
         FROM mois_courant mc, mois_precedent mp, annee_precedente ap
       `),
       
@@ -398,12 +403,20 @@ router.get('/tableau-bord-executif', async (req, res) => {
           nomterrain,
           COUNT(*) as nb_reservations_30j,
           SUM(tarif) as ca_30j,
-          (SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) / (30 * 12) * 100) as taux_occupation
+          CASE 
+            WHEN COUNT(*) > 0 
+            THEN (SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) / (30 * 12) * 100)
+            ELSE 0 
+          END as taux_occupation
         FROM reservation
         WHERE statut IN ('confirmée', 'payé', 'terminée')
         AND datereservation >= CURRENT_DATE - INTERVAL '30 days'
         GROUP BY numeroterrain, nomterrain
-        HAVING (SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) / (30 * 12) * 100) < 40
+        HAVING CASE 
+          WHEN COUNT(*) > 0 
+          THEN (SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) / (30 * 12) * 100)
+          ELSE 0 
+        END < 40
         ORDER BY taux_occupation ASC
       `)
     ]);
@@ -413,16 +426,17 @@ router.get('/tableau-bord-executif', async (req, res) => {
       data: {
         kpi_principaux: {
           ...kpiPrincipaux.rows[0],
-          ca_total: parseFloat(kpiPrincipaux.rows[0].ca_total || 0),
-          panier_moyen: parseFloat(kpiPrincipaux.rows[0].panier_moyen || 0),
-          heures_vendues: parseFloat(kpiPrincipaux.rows[0].heures_vendues || 0),
-          revenu_par_heure: parseFloat(kpiPrincipaux.rows[0].ca_total || 0) / parseFloat(kpiPrincipaux.rows[0].heures_vendues || 1)
+          ca_total: parseFloat(kpiPrincipaux.rows[0]?.ca_total || 0),
+          panier_moyen: parseFloat(kpiPrincipaux.rows[0]?.panier_moyen || 0),
+          heures_vendues: parseFloat(kpiPrincipaux.rows[0]?.heures_vendues || 0),
+          revenu_par_heure: parseFloat(kpiPrincipaux.rows[0]?.ca_total || 0) / Math.max(1, parseFloat(kpiPrincipaux.rows[0]?.heures_vendues || 1))
         },
         performance_vs_objectifs: performance.rows[0] ? {
           ...performance.rows[0],
           ca_realise: parseFloat(performance.rows[0].ca_realise || 0),
           taux_realisation_ca: parseFloat(performance.rows[0].taux_realisation_ca || 0),
-          taux_realisation_reservations: parseFloat(performance.rows[0].taux_realisation_reservations || 0)
+          taux_realisation_reservations: parseFloat(performance.rows[0].taux_realisation_reservations || 0),
+          nouveaux_clients: parseInt(performance.rows[0].nouveaux_clients || 0)
         } : {},
         sante_financiere: sante.rows[0] ? {
           ...sante.rows[0],
@@ -464,7 +478,6 @@ router.get('/analyse-mensuelle/:annee', async (req, res) => {
         COUNT(*) as nombre_reservations,
         SUM(tarif) as chiffre_affaires,
         AVG(tarif) as tarif_moyen,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tarif) as tarif_median,
         MIN(tarif) as tarif_min,
         MAX(tarif) as tarif_max,
         SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_totales,
@@ -472,7 +485,11 @@ router.get('/analyse-mensuelle/:annee', async (req, res) => {
         COUNT(DISTINCT numeroterrain) as terrains_utilises,
         COUNT(DISTINCT email) as clients_uniques,
         COUNT(DISTINCT DATE(datereservation)) as jours_actifs,
-        SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) as tarif_horaire_moyen,
+        CASE 
+          WHEN SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) > 0 
+          THEN SUM(tarif) / SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600)
+          ELSE 0 
+        END as tarif_horaire_moyen,
         COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%foot%' THEN email END) as clients_football,
         SUM(CASE WHEN typeterrain ILIKE '%foot%' THEN tarif ELSE 0 END) as ca_football,
         COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%basket%' THEN email END) as clients_basketball,
@@ -523,7 +540,6 @@ router.get('/analyse-mensuelle', async (req, res) => {
         COUNT(*) as nombre_reservations,
         SUM(tarif) as chiffre_affaires,
         AVG(tarif) as tarif_moyen,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tarif) as tarif_median,
         MIN(tarif) as tarif_min,
         MAX(tarif) as tarif_max,
         SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_totales,
@@ -531,7 +547,11 @@ router.get('/analyse-mensuelle', async (req, res) => {
         COUNT(DISTINCT numeroterrain) as terrains_utilises,
         COUNT(DISTINCT email) as clients_uniques,
         COUNT(DISTINCT DATE(datereservation)) as jours_actifs,
-        SUM(tarif) / NULLIF(SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600), 0) as tarif_horaire_moyen,
+        CASE 
+          WHEN SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) > 0 
+          THEN SUM(tarif) / SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600)
+          ELSE 0 
+        END as tarif_horaire_moyen,
         COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%foot%' THEN email END) as clients_football,
         SUM(CASE WHEN typeterrain ILIKE '%foot%' THEN tarif ELSE 0 END) as ca_football,
         COUNT(DISTINCT CASE WHEN typeterrain ILIKE '%basket%' THEN email END) as clients_basketball,
@@ -570,31 +590,33 @@ router.get('/analyse-mensuelle', async (req, res) => {
   }
 });
 
-// 📊 Analyse par terrain
+// 📊 Analyse par terrain (corrigée pour utiliser uniquement la table reservation)
 router.get('/analyse-par-terrain', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
-        t.numeroterrain,
-        t.nomterrain,
-        t.typeterrain,
-        COUNT(r.id) as nombre_reservations,
-        SUM(r.tarif) as chiffre_affaires,
-        AVG(r.tarif) as tarif_moyen,
-        SUM(EXTRACT(EPOCH FROM (r.heurefin - r.heurereservation))/3600) as heures_utilisees,
-        COUNT(DISTINCT r.email) as clients_uniques,
-        COUNT(DISTINCT DATE(r.datereservation)) as jours_actifs,
-        (SUM(EXTRACT(EPOCH FROM (r.heurefin - r.heurereservation))/3600) / (24 * 30)) * 100 as taux_occupation,
-        AVG(EXTRACT(EPOCH FROM (r.heurefin - r.heurereservation))/3600) as duree_moyenne,
-        MIN(r.tarif) as tarif_min,
-        MAX(r.tarif) as tarif_max,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY r.tarif) as tarif_median,
-        t.tarifhoraire as tarif_horaire_standard
-      FROM terrain t
-      LEFT JOIN reservation r ON t.numeroterrain = r.numeroterrain 
-        AND r.statut IN ('confirmée', 'payé', 'terminée')
-        AND r.datereservation >= CURRENT_DATE - INTERVAL '90 days'
-      GROUP BY t.numeroterrain, t.nomterrain, t.typeterrain, t.tarifhoraire
+        numeroterrain,
+        nomterrain,
+        typeterrain,
+        COUNT(*) as nombre_reservations,
+        SUM(tarif) as chiffre_affaires,
+        AVG(tarif) as tarif_moyen,
+        SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as heures_utilisees,
+        COUNT(DISTINCT email) as clients_uniques,
+        COUNT(DISTINCT DATE(datereservation)) as jours_actifs,
+        CASE 
+          WHEN COUNT(*) > 0 
+          THEN (SUM(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) / (24 * 30)) * 100
+          ELSE 0 
+        END as taux_occupation,
+        AVG(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600) as duree_moyenne,
+        MIN(tarif) as tarif_min,
+        MAX(tarif) as tarif_max,
+        AVG(tarif / NULLIF(EXTRACT(EPOCH FROM (heurefin - heurereservation))/3600, 0)) as tarif_horaire_moyen
+      FROM reservation
+      WHERE statut IN ('confirmée', 'payé', 'terminée')
+        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
+      GROUP BY numeroterrain, nomterrain, typeterrain
       ORDER BY chiffre_affaires DESC NULLS LAST
     `);
 
@@ -612,11 +634,10 @@ router.get('/analyse-par-terrain', async (req, res) => {
         duree_moyenne: parseFloat(row.duree_moyenne || 0),
         tarif_min: parseFloat(row.tarif_min || 0),
         tarif_max: parseFloat(row.tarif_max || 0),
-        tarif_median: parseFloat(row.tarif_median || 0),
-        tarif_horaire_standard: parseFloat(row.tarif_horaire_standard || 0),
-        revenu_par_heure: parseFloat(row.chiffre_affaires || 0) / parseFloat(row.heures_utilisees || 1),
+        tarif_horaire_moyen: parseFloat(row.tarif_horaire_moyen || 0),
+        revenu_par_heure: parseFloat(row.chiffre_affaires || 0) / Math.max(1, parseFloat(row.heures_utilisees || 0)),
         rentabilite: parseFloat(row.chiffre_affaires || 0) > 0 ? 
-          (parseFloat(row.chiffre_affaires || 0) / (parseFloat(row.heures_utilisees || 0) * parseFloat(row.tarif_horaire_standard || 1)) * 100).toFixed(2) : 0
+          (parseFloat(row.chiffre_affaires || 0) / Math.max(1, parseFloat(row.heures_utilisees || 0) * parseFloat(row.tarif_horaire_moyen || 1)) * 100).toFixed(2) : "0.00"
       }))
     });
   } catch (error) {
@@ -694,7 +715,6 @@ router.get('/analyse-cohortes', async (req, res) => {
         SELECT 
           DATE_TRUNC('month', premier_mois) as cohorte_mois,
           COUNT(DISTINCT email) as cohorte_size,
-          -- Retentions par mois
           COUNT(DISTINCT CASE 
             WHEN DATE_TRUNC('month', mois) = DATE_TRUNC('month', premier_mois) 
             THEN email 
@@ -731,13 +751,6 @@ router.get('/analyse-cohortes', async (req, res) => {
       SELECT 
         cohorte_mois,
         cohorte_size,
-        mois_0,
-        mois_1,
-        mois_2,
-        mois_3,
-        mois_4,
-        mois_5,
-        mois_6,
         ROUND((mois_1::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_1,
         ROUND((mois_2::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_2,
         ROUND((mois_3::DECIMAL / NULLIF(mois_0, 0) * 100), 2) as retention_mois_3,
@@ -758,9 +771,8 @@ router.get('/analyse-cohortes', async (req, res) => {
         mois_6: parseFloat(cohorte.retention_mois_6 || 0)
       };
 
-      // Calcul CLV (Customer Lifetime Value) simplifié
-      const caMoyenParMois = 100; // À remplacer par votre calcul réel
-      const vieClientMois = Object.values(tauxRetention).reduce((a, b) => a + b, 0) / 100;
+      const caMoyenParMois = 100; // Valeur moyenne par mois (à ajuster selon vos données)
+      const vieClientMois = Object.values(tauxRetention).filter(v => !isNaN(v)).reduce((a, b) => a + b, 0) / 100;
       const clv = caMoyenParMois * vieClientMois;
 
       return {
@@ -783,8 +795,8 @@ router.get('/analyse-cohortes', async (req, res) => {
         indicateurs: {
           retention_moyenne: calculerRetentionMoyenne(cohortesAvecCalculs),
           valeur_vie_client_moyenne: calculerVLCMoyenne(cohortesAvecCalculs),
-          taux_attrition_moyen: ((100 - (cohortesAvecCalculs.reduce((sum, c) => 
-            sum + c.taux_retention.mois_6, 0) / cohortesAvecCalculs.length)).toFixed(2))
+          taux_attrition_moyen: cohortesAvecCalculs.length > 0 ? 
+            ((100 - (cohortesAvecCalculs.reduce((sum, c) => sum + c.taux_retention.mois_6, 0) / cohortesAvecCalculs.length)).toFixed(2)) : "0.00"
         }
       }
     });
@@ -808,7 +820,8 @@ router.get('/test', (req, res) => {
       '/analyse-mensuelle/:annee',
       '/analyse-par-terrain',
       '/previsions',
-      '/analyse-cohortes'
+      '/analyse-cohortes',
+      '/test'
     ]
   });
 });
