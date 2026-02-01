@@ -18,14 +18,17 @@ router.get('/analyse/utilisation-terrains', async (req, res) => {
         // 1. Terrains les plus réservés
         const terrainsPopulaires = await db.query(`
             SELECT 
-                Terrain,
+                numeroterrain,
+                nomterrain,
+                typeterrain,
+                surfaceterrains,
                 COUNT(*) as nombre_reservations,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations_confirmees,
                 COUNT(CASE WHEN Statut = 'disponible' THEN 1 END) as creneaux_disponibles,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
             FROM creneaux
             WHERE 1=1 ${dateFilter}
-            GROUP BY Terrain
+            GROUP BY numeroterrain, nomterrain, typeterrain, surfaceterrains
             ORDER BY nombre_reservations DESC
             ${limit ? `LIMIT ${limit}` : ''}
         `);
@@ -35,13 +38,13 @@ router.get('/analyse/utilisation-terrains', async (req, res) => {
             SELECT 
                 EXTRACT(DOW FROM Date) as jour_semaine,
                 TO_CHAR(Date, 'Day') as nom_jour,
-                EXTRACT(HOUR FROM "Heure début") as heure_debut,
+                EXTRACT(HOUR FROM heuredebut) as heure_debut,
                 COUNT(*) as nombre_reservations,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
             FROM creneaux
             WHERE Statut = 'réservé'
             ${dateFilter}
-            GROUP BY EXTRACT(DOW FROM Date), TO_CHAR(Date, 'Day'), EXTRACT(HOUR FROM "Heure début")
+            GROUP BY EXTRACT(DOW FROM Date), TO_CHAR(Date, 'Day'), EXTRACT(HOUR FROM heuredebut)
             ORDER BY nombre_reservations DESC
         `);
 
@@ -50,14 +53,15 @@ router.get('/analyse/utilisation-terrains', async (req, res) => {
             SELECT 
                 EXTRACT(DOW FROM Date) as jour_semaine,
                 TO_CHAR(Date, 'Day') as nom_jour,
-                EXTRACT(HOUR FROM "Heure début") as heure_debut,
-                Terrain,
+                EXTRACT(HOUR FROM heuredebut) as heure_debut,
+                numeroterrain,
+                nomterrain,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
             FROM creneaux
             WHERE 1=1 ${dateFilter}
-            GROUP BY EXTRACT(DOW FROM Date), TO_CHAR(Date, 'Day'), EXTRACT(HOUR FROM "Heure début"), Terrain
+            GROUP BY EXTRACT(DOW FROM Date), TO_CHAR(Date, 'Day'), EXTRACT(HOUR FROM heuredebut), numeroterrain, nomterrain
             HAVING COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) = 0
             OR (COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)) < 10
             ORDER BY taux_occupation ASC
@@ -67,9 +71,9 @@ router.get('/analyse/utilisation-terrains', async (req, res) => {
         const distributionHoraire = await db.query(`
             SELECT 
                 CASE 
-                    WHEN EXTRACT(HOUR FROM "Heure début") BETWEEN 8 AND 11 THEN 'Matin (8h-12h)'
-                    WHEN EXTRACT(HOUR FROM "Heure début") BETWEEN 12 AND 17 THEN 'Après-midi (12h-18h)'
-                    WHEN EXTRACT(HOUR FROM "Heure début") BETWEEN 18 AND 22 THEN 'Soir (18h-22h)'
+                    WHEN EXTRACT(HOUR FROM heuredebut) BETWEEN 8 AND 11 THEN 'Matin (8h-12h)'
+                    WHEN EXTRACT(HOUR FROM heuredebut) BETWEEN 12 AND 17 THEN 'Après-midi (12h-18h)'
+                    WHEN EXTRACT(HOUR FROM heuredebut) BETWEEN 18 AND 22 THEN 'Soir (18h-22h)'
                     ELSE 'Nuit'
                 END as plage_horaire,
                 COUNT(*) as total_creneaux,
@@ -136,7 +140,7 @@ router.get('/analyse/taux-occupation', async (req, res) => {
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'disponible' THEN 1 END) as creneaux_non_reserves,
                 ROUND((COUNT(CASE WHEN Statut = 'disponible' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_non_occupation,
-                SUM(CASE WHEN Statut = 'disponible' THEN EXTRACT(EPOCH FROM ("Heure fin" - "Heure début"))/3600 ELSE 0 END) as heures_perdues
+                SUM(CASE WHEN Statut = 'disponible' THEN EXTRACT(EPOCH FROM (heurefin - heuredebut))/3600 ELSE 0 END) as heures_perdues
             FROM creneaux
             ${dateCondition}
             GROUP BY Date
@@ -146,14 +150,16 @@ router.get('/analyse/taux-occupation', async (req, res) => {
         // Pertes par terrain
         const pertesParTerrain = await db.query(`
             SELECT 
-                Terrain,
+                numeroterrain,
+                nomterrain,
+                typeterrain,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'disponible' THEN 1 END) as creneaux_non_reserves,
                 ROUND((COUNT(CASE WHEN Statut = 'disponible' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_non_occupation,
-                SUM(CASE WHEN Statut = 'disponible' THEN "Tarif" ELSE 0 END) as revenu_perdu
+                SUM(CASE WHEN Statut = 'disponible' THEN tarif ELSE 0 END) as revenu_perdu
             FROM creneaux
             ${dateCondition}
-            GROUP BY Terrain
+            GROUP BY numeroterrain, nomterrain, typeterrain
             ORDER BY revenu_perdu DESC
         `);
 
@@ -165,7 +171,7 @@ router.get('/analyse/taux-occupation', async (req, res) => {
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as creneaux_reserves,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation,
-                SUM(CASE WHEN Statut = 'disponible' THEN "Tarif" ELSE 0 END) as revenu_perdu
+                SUM(CASE WHEN Statut = 'disponible' THEN tarif ELSE 0 END) as revenu_perdu
             FROM creneaux
             ${dateCondition}
             GROUP BY EXTRACT(DOW FROM Date), TO_CHAR(Date, 'Day')
@@ -210,16 +216,16 @@ router.get('/analyse/financiere', async (req, res) => {
     try {
         const { date_debut, date_fin, group_by } = req.query;
         let dateCondition = '';
-        let groupByClause = 'Terrain';
+        let groupByClause = 'numeroterrain';
         
         if (date_debut && date_fin) {
             dateCondition = `WHERE Date BETWEEN '${date_debut}' AND '${date_fin}'`;
         }
         
         if (group_by === 'type') {
-            groupByClause = 'Type';
+            groupByClause = 'typeterrain';
         } else if (group_by === 'surface') {
-            groupByClause = 'Surface';
+            groupByClause = 'surfaceterrains';
         } else if (group_by === 'jour') {
             groupByClause = 'Date';
         }
@@ -230,10 +236,10 @@ router.get('/analyse/financiere', async (req, res) => {
                 ${groupByClause},
                 COUNT(*) as nombre_reservations,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations_confirmees,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as chiffre_affaires,
-                AVG(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END) as tarif_moyen,
-                MAX("Tarif") as tarif_max,
-                MIN(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END) as tarif_min_reserve
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as chiffre_affaires,
+                AVG(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END) as tarif_moyen,
+                MAX(tarif) as tarif_max,
+                MIN(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END) as tarif_min_reserve
             FROM creneaux
             ${dateCondition}
             GROUP BY ${groupByClause}
@@ -243,48 +249,49 @@ router.get('/analyse/financiere', async (req, res) => {
         // Analyse par surface
         const analyseSurface = await db.query(`
             SELECT 
-                Surface,
+                surfaceterrains,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca_total,
-                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END), 2) as tarif_moyen,
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca_total,
+                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END), 2) as tarif_moyen,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation,
-                ROUND((SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) / COUNT(*)), 2) as rendement_par_creneau
+                ROUND((SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) / COUNT(*)), 2) as rendement_par_creneau
             FROM creneaux
             ${dateCondition}
-            GROUP BY Surface
+            GROUP BY surfaceterrains
             ORDER BY rendement_par_creneau DESC
         `);
 
-        // Analyse par type de jeu
+        // Analyse par type de terrain
         const analyseType = await db.query(`
             SELECT 
-                Type,
+                typeterrain,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca_total,
-                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END), 2) as tarif_moyen,
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca_total,
+                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END), 2) as tarif_moyen,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
             FROM creneaux
             ${dateCondition}
-            GROUP BY Type
+            GROUP BY typeterrain
             ORDER BY ca_total DESC
         `);
 
         // Rentabilité par terrain
         const rentabiliteTerrain = await db.query(`
             SELECT 
-                Terrain,
-                Surface,
-                Type,
+                numeroterrain,
+                nomterrain,
+                typeterrain,
+                surfaceterrains,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca_total,
-                ROUND((SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) / COUNT(*)), 2) as rendement_moyen_par_creneau,
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca_total,
+                ROUND((SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) / COUNT(*)), 2) as rendement_moyen_par_creneau,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
             FROM creneaux
             ${dateCondition}
-            GROUP BY Terrain, Surface, Type
+            GROUP BY numeroterrain, nomterrain, typeterrain, surfaceterrains
             ORDER BY rendement_moyen_par_creneau DESC
         `);
 
@@ -296,8 +303,8 @@ router.get('/analyse/financiere', async (req, res) => {
                 analyse_type: analyseType.rows,
                 rentabilite_terrains: rentabiliteTerrain.rows,
                 recommendations: {
-                    investissement: rentabiliteTerrain.rows.slice(0, 3).map(t => t.terrain).join(', '),
-                    revision_tarifs: analyseSurface.rows.filter(s => s.taux_occupation < 50).map(s => s.surface).join(', '),
+                    investissement: rentabiliteTerrain.rows.slice(0, 3).map(t => t.nomterrain || `Terrain ${t.numeroterrain}`).join(', '),
+                    revision_tarifs: analyseSurface.rows.filter(s => s.taux_occupation < 50).map(s => s.surfaceterrains).join(', '),
                     priorites: caParCritere.rows.slice(0, 5)
                 }
             }
@@ -318,8 +325,8 @@ router.get('/analyse/tarification', async (req, res) => {
         const { terrain, type } = req.query;
         let whereConditions = ['Statut = \'réservé\''];
         
-        if (terrain) whereConditions.push(`Terrain = '${terrain}'`);
-        if (type) whereConditions.push(`Type = '${type}'`);
+        if (terrain) whereConditions.push(`numeroterrain = '${terrain}'`);
+        if (type) whereConditions.push(`typeterrain = '${type}'`);
 
         const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
@@ -327,16 +334,16 @@ router.get('/analyse/tarification', async (req, res) => {
         const tarifsParHoraire = await db.query(`
             SELECT 
                 CASE 
-                    WHEN EXTRACT(HOUR FROM "Heure début") BETWEEN 8 AND 11 THEN 'Matin'
-                    WHEN EXTRACT(HOUR FROM "Heure début") BETWEEN 12 AND 17 THEN 'Après-midi'
-                    WHEN EXTRACT(HOUR FROM "Heure début") BETWEEN 18 AND 22 THEN 'Soir'
+                    WHEN EXTRACT(HOUR FROM heuredebut) BETWEEN 8 AND 11 THEN 'Matin'
+                    WHEN EXTRACT(HOUR FROM heuredebut) BETWEEN 12 AND 17 THEN 'Après-midi'
+                    WHEN EXTRACT(HOUR FROM heuredebut) BETWEEN 18 AND 22 THEN 'Soir'
                     ELSE 'Nuit'
                 END as plage_horaire,
                 COUNT(*) as nombre_reservations,
-                AVG("Tarif") as tarif_moyen,
-                MIN("Tarif") as tarif_min,
-                MAX("Tarif") as tarif_max,
-                ROUND(STDDEV("Tarif"), 2) as ecart_type,
+                AVG(tarif) as tarif_moyen,
+                MIN(tarif) as tarif_min,
+                MAX(tarif) as tarif_max,
+                ROUND(STDDEV(tarif), 2) as ecart_type,
                 ROUND((COUNT(*) * 100.0 / (SELECT COUNT(*) FROM creneaux ${whereClause})), 2) as part_marche
             FROM creneaux
             ${whereClause}
@@ -347,11 +354,11 @@ router.get('/analyse/tarification', async (req, res) => {
         // Corrélation tarif/occupation
         const correlationTarifOccupation = await db.query(`
             SELECT 
-                ROUND("Tarif" / 5) * 5 as tranche_tarif,
+                ROUND(tarif / 5) * 5 as tranche_tarif,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation,
-                ROUND(AVG("Tarif"), 2) as tarif_moyen_tranche
+                ROUND(AVG(tarif), 2) as tarif_moyen_tranche
             FROM creneaux
             GROUP BY tranche_tarif
             ORDER BY tranche_tarif
@@ -360,15 +367,18 @@ router.get('/analyse/tarification', async (req, res) => {
         // Terrains sous-facturés
         const terrainsSousFactures = await db.query(`
             SELECT 
-                Terrain,
-                AVG("Tarif") as tarif_moyen_terrain,
-                (SELECT AVG("Tarif") FROM creneaux c2 WHERE c2.Surface = c1.Surface AND c2.Type = c1.Type) as tarif_moyen_categorie,
+                numeroterrain,
+                nomterrain,
+                typeterrain,
+                surfaceterrains,
+                AVG(tarif) as tarif_moyen_terrain,
+                (SELECT AVG(tarif) FROM creneaux c2 WHERE c2.surfaceterrains = c1.surfaceterrains AND c2.typeterrain = c1.typeterrain) as tarif_moyen_categorie,
                 COUNT(*) as nombre_reservations,
-                ROUND(AVG("Tarif") - (SELECT AVG("Tarif") FROM creneaux c2 WHERE c2.Surface = c1.Surface AND c2.Type = c1.Type), 2) as difference_tarif,
+                ROUND(AVG(tarif) - (SELECT AVG(tarif) FROM creneaux c2 WHERE c2.surfaceterrains = c1.surfaceterrains AND c2.typeterrain = c1.typeterrain), 2) as difference_tarif,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
             FROM creneaux c1
-            GROUP BY Terrain, Surface, Type
-            HAVING AVG("Tarif") < (SELECT AVG("Tarif") FROM creneaux c2 WHERE c2.Surface = c1.Surface AND c2.Type = c1.Type) * 0.9
+            GROUP BY numeroterrain, nomterrain, typeterrain, surfaceterrains
+            HAVING AVG(tarif) < (SELECT AVG(tarif) FROM creneaux c2 WHERE c2.surfaceterrains = c1.surfaceterrains AND c2.typeterrain = c1.typeterrain) * 0.9
             ORDER BY difference_tarif ASC
         `);
 
@@ -376,14 +386,15 @@ router.get('/analyse/tarification', async (req, res) => {
         const elasticitePrix = await db.query(`
             WITH stats_par_terrain AS (
                 SELECT 
-                    Terrain,
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "Tarif") as tarif_median,
-                    AVG("Tarif") as tarif_moyen,
+                    numeroterrain,
+                    nomterrain,
+                    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tarif) as tarif_median,
+                    AVG(tarif) as tarif_moyen,
                     COUNT(*) as total_creneaux,
                     COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
                     ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation
                 FROM creneaux
-                GROUP BY Terrain
+                GROUP BY numeroterrain, nomterrain
             )
             SELECT 
                 *,
@@ -408,7 +419,7 @@ router.get('/analyse/tarification', async (req, res) => {
                         .map(p => `Augmenter ${p.plage_horaire} de 10%`),
                     promotions: correlationTarifOccupation.rows.filter(t => t.taux_occupation < 40)
                         .map(t => `Promo tranche ${t.tranche_tarif}€`),
-                    ajustements: terrainsSousFactures.rows.map(t => `${t.terrain}: +${Math.abs(t.difference_tarif).toFixed(2)}€`)
+                    ajustements: terrainsSousFactures.rows.map(t => `${t.nomterrain || 'Terrain ' + t.numeroterrain}: +${Math.abs(t.difference_tarif).toFixed(2)}€`)
                 }
             }
         });
@@ -433,9 +444,9 @@ router.get('/analyse/clients', async (req, res) => {
                 COUNT(DISTINCT Date) as jours_distincts,
                 MIN(Date) as premiere_reservation,
                 MAX(Date) as derniere_reservation,
-                SUM("Tarif") as montant_total,
-                AVG("Tarif") as panier_moyen,
-                STRING_AGG(DISTINCT Terrain, ', ') as terrains_frequentes,
+                SUM(tarif) as montant_total,
+                AVG(tarif) as panier_moyen,
+                STRING_AGG(DISTINCT nomterrain, ', ') as terrains_frequentes,
                 CASE 
                     WHEN COUNT(*) >= 10 THEN 'VIP'
                     WHEN COUNT(*) BETWEEN 5 AND 9 THEN 'Régulier'
@@ -456,9 +467,9 @@ router.get('/analyse/clients', async (req, res) => {
                 Nom,
                 EXTRACT(DOW FROM Date) as jour_prefere_num,
                 TO_CHAR(Date, 'Day') as jour_prefere,
-                MODE() WITHIN GROUP (ORDER BY EXTRACT(HOUR FROM "Heure début")) as heure_preferee,
+                MODE() WITHIN GROUP (ORDER BY EXTRACT(HOUR FROM heuredebut)) as heure_preferee,
                 COUNT(*) as total_reservations,
-                AVG("Tarif") as tarif_moyen_paye
+                AVG(tarif) as tarif_moyen_paye
             FROM creneaux
             WHERE Statut = 'réservé' AND Nom IS NOT NULL AND Nom != ''
             GROUP BY Nom, EXTRACT(DOW FROM Date), TO_CHAR(Date, 'Day')
@@ -587,10 +598,10 @@ router.get('/analyse/performance', async (req, res) => {
                 ${groupBy} as periode,
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as creneaux_reserves,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as chiffre_affaires,
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as chiffre_affaires,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation,
-                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END), 2) as tarif_moyen,
-                ROUND(SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) / COUNT(DISTINCT Terrain), 2) as ca_par_terrain
+                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END), 2) as tarif_moyen,
+                ROUND(SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) / COUNT(DISTINCT numeroterrain), 2) as ca_par_terrain
             FROM creneaux
             GROUP BY ${groupBy}
             ORDER BY periode DESC
@@ -603,12 +614,12 @@ router.get('/analyse/performance', async (req, res) => {
                 COUNT(*) as total_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as creneaux_reserves,
                 COUNT(CASE WHEN Statut = 'disponible' THEN 1 END) as creneaux_disponibles,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as chiffre_affaires_total,
-                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END), 2) as tarif_moyen,
-                COUNT(DISTINCT Terrain) as nombre_terrains_actifs,
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as chiffre_affaires_total,
+                ROUND(AVG(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END), 2) as tarif_moyen,
+                COUNT(DISTINCT numeroterrain) as nombre_terrains_actifs,
                 COUNT(DISTINCT Nom) as nombre_clients_uniques,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation_global,
-                ROUND(SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) / COUNT(DISTINCT Date), 2) as ca_moyen_par_jour
+                ROUND(SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) / COUNT(DISTINCT Date), 2) as ca_moyen_par_jour
             FROM creneaux
         `);
 
@@ -618,7 +629,7 @@ router.get('/analyse/performance', async (req, res) => {
                 SELECT 
                     DATE_TRUNC('day', Date) as jour,
                     COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
-                    SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca_journalier
+                    SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca_journalier
                 FROM creneaux
                 GROUP BY DATE_TRUNC('day', Date)
             )
@@ -638,16 +649,17 @@ router.get('/analyse/performance', async (req, res) => {
         // Corrélations avancées
         const correlations = await db.query(`
             SELECT 
-                EXTRACT(HOUR FROM "Heure début") as heure,
-                Terrain,
-                Type,
-                AVG("Tarif") as tarif_moyen,
+                EXTRACT(HOUR FROM heuredebut) as heure,
+                numeroterrain,
+                nomterrain,
+                typeterrain,
+                AVG(tarif) as tarif_moyen,
                 COUNT(*) as nombre_creneaux,
                 COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
                 ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation,
-                SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca_total
+                SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca_total
             FROM creneaux
-            GROUP BY EXTRACT(HOUR FROM "Heure début"), Terrain, Type
+            GROUP BY EXTRACT(HOUR FROM heuredebut), numeroterrain, nomterrain, typeterrain
             HAVING COUNT(*) >= 5
             ORDER BY ca_total DESC
             LIMIT 50
@@ -659,7 +671,7 @@ router.get('/analyse/performance', async (req, res) => {
                 SELECT 
                     DATE_TRUNC('month', Date) as mois,
                     COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as reservations,
-                    SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca_mensuel,
+                    SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca_mensuel,
                     COUNT(DISTINCT Nom) as nouveaux_clients
                 FROM creneaux
                 GROUP BY DATE_TRUNC('month', Date)
@@ -690,7 +702,7 @@ router.get('/analyse/performance', async (req, res) => {
                     expansion: kpisGlobaux.rows[0]?.taux_occupation_global > 80 ? 
                         "Considérez l'ouverture d'un nouveau terrain" : 
                         "Optimisez d'abord l'occupation actuelle",
-                    investissement: correlations.rows.slice(0, 3).map(c => c.terrain).join(', '),
+                    investissement: correlations.rows.slice(0, 3).map(c => c.nomterrain || `Terrain ${c.numeroterrain}`).join(', '),
                     optimisation: tendances.rows.filter(t => t.croissance_reservations < 0).length > 10 ?
                         "Action marketing nécessaire pour relancer la croissance" :
                         "Croissance stable, maintenir les efforts"
@@ -716,23 +728,23 @@ router.get('/analyse/synthese', async (req, res) => {
                 SELECT 
                     COUNT(*) as total_creneaux,
                     COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) as creneaux_reserves,
-                    SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as chiffre_affaires_total,
+                    SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as chiffre_affaires_total,
                     ROUND((COUNT(CASE WHEN Statut = 'réservé' THEN 1 END) * 100.0 / COUNT(*)), 2) as taux_occupation_global,
-                    ROUND(AVG(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE NULL END), 2) as tarif_moyen,
-                    COUNT(DISTINCT Terrain) as nombre_terrains,
+                    ROUND(AVG(CASE WHEN Statut = 'réservé' THEN tarif ELSE NULL END), 2) as tarif_moyen,
+                    COUNT(DISTINCT numeroterrain) as nombre_terrains,
                     COUNT(DISTINCT Nom) as nombre_clients
                 FROM creneaux
             `),
             db.query(`
-                SELECT Terrain, COUNT(*) as reservations
+                SELECT numeroterrain, nomterrain, COUNT(*) as reservations
                 FROM creneaux 
                 WHERE Statut = 'réservé'
-                GROUP BY Terrain 
+                GROUP BY numeroterrain, nomterrain
                 ORDER BY reservations DESC 
                 LIMIT 3
             `),
             db.query(`
-                SELECT Nom, COUNT(*) as reservations, SUM("Tarif") as depense_totale
+                SELECT Nom, COUNT(*) as reservations, SUM(tarif) as depense_totale
                 FROM creneaux 
                 WHERE Statut = 'réservé' AND Nom IS NOT NULL
                 GROUP BY Nom 
@@ -742,7 +754,7 @@ router.get('/analyse/synthese', async (req, res) => {
             db.query(`
                 WITH daily_ca AS (
                     SELECT DATE_TRUNC('day', Date) as jour, 
-                           SUM(CASE WHEN Statut = 'réservé' THEN "Tarif" ELSE 0 END) as ca
+                           SUM(CASE WHEN Statut = 'réservé' THEN tarif ELSE 0 END) as ca
                     FROM creneaux
                     WHERE Date >= CURRENT_DATE - INTERVAL '30 days'
                     GROUP BY DATE_TRUNC('day', Date)
@@ -759,18 +771,18 @@ router.get('/analyse/synthese', async (req, res) => {
             SELECT 
                 'Heures creuses' as categorie,
                 COUNT(*) as opportunites,
-                ROUND(SUM("Tarif") * 0.3, 2) as gain_potentiel
+                ROUND(SUM(tarif) * 0.3, 2) as gain_potentiel
             FROM creneaux
             WHERE Statut = 'disponible' 
-            AND EXTRACT(HOUR FROM "Heure début") BETWEEN 14 AND 16
+            AND EXTRACT(HOUR FROM heuredebut) BETWEEN 14 AND 16
             UNION ALL
             SELECT 
                 'Terrains sous-utilisés' as categorie,
-                COUNT(DISTINCT Terrain) as opportunites,
-                ROUND(SUM("Tarif") * 0.2, 2) as gain_potentiel
+                COUNT(DISTINCT numeroterrain) as opportunites,
+                ROUND(SUM(tarif) * 0.2, 2) as gain_potentiel
             FROM creneaux c1
             WHERE Statut = 'disponible'
-            AND (SELECT COUNT(*) FROM creneaux c2 WHERE c2.Terrain = c1.Terrain AND Statut = 'réservé') < 10
+            AND (SELECT COUNT(*) FROM creneaux c2 WHERE c2.numeroterrain = c1.numeroterrain AND Statut = 'réservé') < 10
         `);
 
         res.json({
@@ -812,26 +824,26 @@ router.get('/analyse/synthese', async (req, res) => {
     }
 });
 
-// CRUD de base pour les créneaux (similaire à votre exemple de démonstration)
+// CRUD de base pour les créneaux
 router.post('/', (req, res) => {
-    const { Date, Heure_debut, Heure_fin, Statut, Terrain, Type, Nom, Surface, Tarif } = req.body;
+    const { Date, heuredebut, heurefin, Statut, numeroterrain, typeterrain, Nom, nomterrain, surfaceterrains, tarif } = req.body;
     
     // Validation des données
-    if (!Date || !Heure_debut || !Heure_fin || !Statut || !Terrain || !Type || !Surface || !Tarif) {
+    if (!Date || !heuredebut || !heurefin || !Statut || !numeroterrain || !typeterrain || !surfaceterrains || !tarif) {
         return res.status(400).json({ 
             success: false,
-            message: 'Champs requis: Date, Heure début, Heure fin, Statut, Terrain, Type, Surface, Tarif' 
+            message: 'Champs requis: Date, heuredebut, heurefin, Statut, numeroterrain, typeterrain, surfaceterrains, tarif' 
         });
     }
 
     const sql = `
         INSERT INTO creneaux 
-        (Date, "Heure début", "Heure fin", Statut, Terrain, Type, Nom, Surface, "Tarif") 
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
+        (Date, heuredebut, heurefin, Statut, numeroterrain, typeterrain, Nom, nomterrain, surfaceterrains, tarif) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
         RETURNING *
     `;
     
-    db.query(sql, [Date, Heure_debut, Heure_fin, Statut, Terrain, Type, Nom, Surface, Tarif])
+    db.query(sql, [Date, heuredebut, heurefin, Statut, numeroterrain, typeterrain, Nom, nomterrain, surfaceterrains, tarif])
         .then(result => {
             res.status(201).json({
                 success: true,
@@ -849,8 +861,9 @@ router.post('/', (req, res) => {
         });
 });
 
+// Route pour récupérer tous les créneaux
 router.get('/', (req, res) => {
-    const sql = 'SELECT * FROM creneaux ORDER BY Date DESC, "Heure début" DESC';
+    const sql = 'SELECT * FROM creneaux ORDER BY Date DESC, heuredebut DESC';
     
     db.query(sql)
         .then(result => {
@@ -867,6 +880,119 @@ router.get('/', (req, res) => {
                 error: err.message 
             });
         });
+});
+
+// Route pour récupérer un créneau spécifique
+router.get('/:id', (req, res) => {
+    const { id } = req.params;
+    
+    const sql = 'SELECT * FROM creneaux WHERE idcreneaux = $1';
+    
+    db.query(sql, [id])
+        .then(result => {
+            if (result.rows.length === 0) {
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Créneau non trouvé' 
+                });
+            }
+            res.status(200).json({
+                success: true,
+                data: result.rows[0]
+            });
+        })
+        .catch(err => {
+            console.error('Erreur SQL:', err.message);
+            res.status(500).json({ 
+                success: false,
+                message: 'Erreur lors de la récupération du créneau',
+                error: err.message 
+            });
+        });
+});
+
+// Route pour mettre à jour un créneau
+router.put('/:id', (req, res) => {
+    const { id } = req.params;
+    const { Date, heuredebut, heurefin, Statut, numeroterrain, typeterrain, Nom, nomterrain, surfaceterrains, tarif } = req.body;
+    
+    // Validation des données
+    if (!Date || !heuredebut || !heurefin || !Statut || !numeroterrain || !typeterrain || !surfaceterrains || !tarif) {
+        return res.status(400).json({ 
+            success: false,
+            message: 'Tous les champs sont requis' 
+        });
+    }
+
+    const sql = `
+        UPDATE creneaux 
+        SET Date = $1, heuredebut = $2, heurefin = $3, Statut = $4, 
+            numeroterrain = $5, typeterrain = $6, Nom = $7, 
+            nomterrain = $8, surfaceterrains = $9, tarif = $10
+        WHERE idcreneaux = $11 
+        RETURNING *
+    `;
+    
+    db.query(sql, [Date, heuredebut, heurefin, Statut, numeroterrain, typeterrain, Nom, nomterrain, surfaceterrains, tarif, id])
+        .then(result => {
+            if (result.rows.length === 0) {
+                return res.status(404).json({ 
+                    success: false,
+                    message: 'Créneau non trouvé' 
+                });
+            }
+            res.status(200).json({
+                success: true,
+                message: 'Créneau mis à jour avec succès',
+                data: result.rows[0]
+            });
+        })
+        .catch(err => {
+            console.error('Erreur SQL:', err.message);
+            res.status(500).json({ 
+                success: false,
+                message: 'Erreur lors de la mise à jour du créneau',
+                error: err.message 
+            });
+        });
+});
+
+// Route pour supprimer un créneau
+router.delete('/:id', (req, res) => {
+    const { id } = req.params;
+    
+    // Validation stricte de l'ID
+    if (!id || !Number.isInteger(Number(id))) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID doit être un nombre entier'
+      });
+    }
+  
+    const creneauId = parseInt(id, 10);
+  
+    const sql = 'DELETE FROM creneaux WHERE idcreneaux = $1 RETURNING *';
+    
+    db.query(sql, [creneauId])
+      .then(result => {
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: 'Aucun créneau trouvé avec cet ID'
+          });
+        }
+        res.json({
+          success: true,
+          data: result.rows[0]
+        });
+      })
+      .catch(err => {
+        console.error('Erreur DB:', err);
+        res.status(500).json({
+          success: false,
+          message: 'Erreur de base de données'
+        });
+      });
 });
 
 export default router;
