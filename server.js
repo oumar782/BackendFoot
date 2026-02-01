@@ -17,7 +17,8 @@ import prev from './Gestion/prev.js';
 import Prevan from './Gestion/prevann.js';
 import Commande from './Gestion/commande.js';
 import Annalyse from './Gestion/Annalyse-financiere.js';
-import Analysecren from './Gestion/Analyse-cren.js'
+import Analysecren from './Gestion/Analyse-cren.js';
+import Analyseabo from './Gestion/Analyseabo.js';
 
 
 
@@ -69,6 +70,7 @@ app.use('/api/prevannule', Prevan);
 app.use('/api/commande', Commande);
 app.use('/api/annalyse', Annalyse);
 app.use('/api/annalyse-creneaux', Analysecren);
+app.use('/api/annalyse-abonnes', Analyseabo);
 
 
 // 🏥 Health check endpoint amélioré
