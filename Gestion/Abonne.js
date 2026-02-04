@@ -440,7 +440,7 @@ router.get('/analyse-revenus', async (req, res) => {
 });
 
 // ============================================
-// 5. COMPORTEMENT DES ABONNÉS - SIMPLIFIÉ
+// 5. COMPORTEMENT DES ABONNÉS
 // ============================================
 
 router.get('/comportement-abonnes', async (req, res) => {
@@ -515,7 +515,7 @@ router.get('/comportement-abonnes', async (req, res) => {
             SELECT 
                 COUNT(DISTINCT email) as total_clients,
                 COUNT(DISTINCT CASE WHEN heure_reservation IS NOT NULL THEN email END) as clients_actifs,
-                ROUND(AVG(CASE WHEN heure_reservation IS NOT NULL THEN 1 ELSE 0 END) * 100, 2) as taux_activation,
+                ROUND(COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / COUNT(*), 2) as taux_activation,
                 MODE() WITHIN GROUP (ORDER BY EXTRACT(HOUR FROM heure_reservation)) as heure_populaire,
                 COUNT(DISTINCT EXTRACT(HOUR FROM heure_reservation)) as creneaux_utilises,
                 ROUND(AVG(EXTRACT(HOUR FROM heure_reservation)), 1) as heure_moyenne
@@ -526,7 +526,10 @@ router.get('/comportement-abonnes', async (req, res) => {
         res.json({
             success: true,
             data: {
-                heuresPopulaires: heuresPopulaires.rows,
+                heuresPopulaires: heuresPopulaires.rows.map(row => ({
+                    ...row,
+                    heure: parseInt(row.heure) || 0
+                })),
                 topUtilisateurs: topUtilisateurs.rows,
                 frequenceUtilisation: frequenceParType.rows,
                 clientsDormants: clientsDormants.rows,
@@ -544,7 +547,7 @@ router.get('/comportement-abonnes', async (req, res) => {
 });
 
 // ============================================
-// 6. FIDÉLITÉ - SIMPLIFIÉ
+// 6. FIDÉLITÉ
 // ============================================
 
 router.get('/analyse-fidelite', async (req, res) => {
@@ -578,7 +581,7 @@ router.get('/analyse-fidelite', async (req, res) => {
         `);
 
         // Clients avec plusieurs abonnements
-        const clientsRenouvellements = await db.query(`
+        const clientsFideles = await db.query(`
             SELECT 
                 email,
                 nom,
@@ -596,7 +599,7 @@ router.get('/analyse-fidelite', async (req, res) => {
         `);
 
         // Taux de rétention
-        const retentionParPeriode = await db.query(`
+        const analyseRetention = await db.query(`
             SELECT 
                 TO_CHAR(date_debut, 'YYYY-MM') as mois_entree,
                 COUNT(*) as nouveaux_clients,
@@ -659,8 +662,8 @@ router.get('/analyse-fidelite', async (req, res) => {
             success: true,
             data: {
                 segmentationAnciennete: segmentationAnciennete.rows,
-                clientsFideles: clientsRenouvellements.rows,
-                analyseRetention: retentionParPeriode.rows,
+                clientsFideles: clientsFideles.rows,
+                analyseRetention: analyseRetention.rows,
                 meilleursClients: meilleursClients.rows,
                 statistiquesFidelite: statistiquesFidelite.rows[0] || {}
             }
@@ -676,15 +679,15 @@ router.get('/analyse-fidelite', async (req, res) => {
 });
 
 // ============================================
-// 7. RISQUES ET ALERTES - SIMPLIFIÉ
+// 7. RISQUES ET ALERTES - CORRIGÉ
 // ============================================
 
 router.get('/analyse-risques', async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
         
-        // Abonnements problématiques
-        const abonnementsProblematiques = await db.query(`
+        // Abonnements problématiques (sans niveau_risque dans SELECT)
+        const detailsProblemes = await db.query(`
             SELECT 
                 nom,
                 prenom,
@@ -710,7 +713,7 @@ router.get('/analyse-risques', async (req, res) => {
                     WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 'HAUTE'
                     WHEN prix_total <= 0 THEN 'MOYENNE'
                     ELSE 'BASSE'
-                END as niveau_risque
+                END as risque_niveau
             FROM clients
             WHERE 
                 date_fin IS NULL 
@@ -719,11 +722,11 @@ router.get('/analyse-risques', async (req, res) => {
                 OR photo_abonne = ''
                 OR prix_total <= 0
             ORDER BY 
-                CASE niveau_risque
-                    WHEN 'URGENT' THEN 1
-                    WHEN 'CRITIQUE' THEN 2
-                    WHEN 'HAUTE' THEN 3
-                    WHEN 'MOYENNE' THEN 4
+                CASE 
+                    WHEN date_fin IS NULL THEN 1
+                    WHEN statut = 'actif' AND date_fin < $1 THEN 2
+                    WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 3
+                    WHEN prix_total <= 0 THEN 4
                     ELSE 5
                 END,
                 date_fin DESC
@@ -731,7 +734,7 @@ router.get('/analyse-risques', async (req, res) => {
         `, [today]);
 
         // Statistiques des problèmes
-        const statsProblemes = await db.query(`
+        const resumeProblemes = await db.query(`
             SELECT 
                 COUNT(*) as total_clients,
                 COUNT(CASE WHEN date_fin IS NULL THEN 1 END) as sans_date_fin,
@@ -749,7 +752,7 @@ router.get('/analyse-risques', async (req, res) => {
         `, [today]);
 
         // Doublons potentiels
-        const doublonsPotentiels = await db.query(`
+        const doublons = await db.query(`
             SELECT 
                 email,
                 COUNT(*) as occurrences,
@@ -764,7 +767,7 @@ router.get('/analyse-risques', async (req, res) => {
         `);
 
         // Score de risque
-        const scoreRisque = await db.query(`
+        const scoreResult = await db.query(`
             SELECT 
                 ROUND(
                     (COUNT(CASE WHEN date_fin IS NULL THEN 1 END) * 3.0 +
@@ -772,24 +775,24 @@ router.get('/analyse-risques', async (req, res) => {
                      COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) * 2.0 +
                      COUNT(CASE WHEN prix_total <= 0 THEN 1 END) * 4.0) / 
                     (COUNT(*) * 10) * 100, 2
-                ) as score_risque_pourcentage
+                ) as score_risque
             FROM clients
         `, [today]);
 
-        const score = parseFloat(scoreRisque.rows[0]?.score_risque_pourcentage || 0);
+        const scoreRisque = parseFloat(scoreResult.rows[0]?.score_risque || 0);
         let niveauRisque = 'MINIMAL';
-        if (score >= 80) niveauRisque = 'CRITIQUE';
-        else if (score >= 60) niveauRisque = 'ÉLEVÉ';
-        else if (score >= 40) niveauRisque = 'MOYEN';
-        else if (score >= 20) niveauRisque = 'FAIBLE';
+        if (scoreRisque >= 80) niveauRisque = 'CRITIQUE';
+        else if (scoreRisque >= 60) niveauRisque = 'ÉLEVÉ';
+        else if (scoreRisque >= 40) niveauRisque = 'MOYEN';
+        else if (scoreRisque >= 20) niveauRisque = 'FAIBLE';
 
         res.json({
             success: true,
             data: {
-                resumeProblemes: statsProblemes.rows[0] || {},
-                detailsProblemes: abonnementsProblematiques.rows,
-                doublons: doublonsPotentiels.rows,
-                scoreRisque: score,
+                resumeProblemes: resumeProblemes.rows[0] || {},
+                detailsProblemes: detailsProblemes.rows,
+                doublons: doublons.rows,
+                scoreRisque: scoreRisque,
                 niveauRisque: niveauRisque
             }
         });
@@ -804,7 +807,212 @@ router.get('/analyse-risques', async (req, res) => {
 });
 
 // ============================================
-// 8. ABONNÉS À RELANCER - SIMPLIFIÉ
+// 8. SÉCURITÉ ET CONTRÔLE
+// ============================================
+
+router.get('/securite-controle', async (req, res) => {
+    try {
+        // Analyse des photos
+        const analysePhotos = await db.query(`
+            SELECT 
+                COUNT(*) as total_clients,
+                COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
+                COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) as avec_photo,
+                ROUND(COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) * 100.0 / COUNT(*), 2) as taux_couverture
+            FROM clients
+        `);
+
+        // Clients sans photo
+        const clientsSansPhoto = await db.query(`
+            SELECT 
+                nom,
+                prenom,
+                email,
+                telephone,
+                type_abonnement,
+                statut,
+                date_debut,
+                date_fin,
+                prix_total,
+                heure_reservation
+            FROM clients
+            WHERE photo_abonne IS NULL OR photo_abonne = ''
+            ORDER BY 
+                CASE WHEN statut = 'actif' THEN 1 ELSE 2 END,
+                date_debut DESC
+            LIMIT 30
+        `);
+
+        // Contrôle d'accès
+        const controleAcces = await db.query(`
+            SELECT 
+                email,
+                COUNT(DISTINCT CONCAT(nom, ' ', prenom)) as noms_differents,
+                STRING_AGG(DISTINCT CONCAT(nom, ' ', prenom), ' | ') as liste_noms,
+                COUNT(*) as nombre_abonnements
+            FROM clients
+            GROUP BY email
+            HAVING COUNT(DISTINCT CONCAT(nom, ' ', prenom)) > 1
+            ORDER BY noms_differents DESC, nombre_abonnements DESC
+            LIMIT 15
+        `);
+
+        // Cohérence des données
+        const coherenceDonnees = await db.query(`
+            SELECT 
+                'EMAILS_INVALIDES' as type_incoherence,
+                COUNT(*) as nombre,
+                STRING_AGG(email, ', ') as exemples
+            FROM clients
+            WHERE email NOT LIKE '%@%.%'
+            UNION ALL
+            SELECT 
+                'TELEPHONES_INVALIDES',
+                COUNT(*),
+                STRING_AGG(telephone, ', ')
+            FROM clients
+            WHERE telephone IS NULL OR LENGTH(telephone) < 8
+            UNION ALL
+            SELECT 
+                'DATES_INCOHERENTES',
+                COUNT(*),
+                STRING_AGG(CONCAT(date_debut::text, '->', date_fin::text), ' | ')
+            FROM clients
+            WHERE date_fin < date_debut
+            UNION ALL
+            SELECT 
+                'STATUTS_INCOHERENTS',
+                COUNT(*),
+                STRING_AGG(CONCAT(nom, ' ', prenom, ' (', statut, ')'), ' | ')
+            FROM clients
+            WHERE statut NOT IN ('actif', 'inactif', 'expire')
+        `);
+
+        // Audit des modifications récentes
+        const auditSecurite = await db.query(`
+            SELECT 
+                type_abonnement,
+                COUNT(*) as nombre_abonnements,
+                COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
+                COUNT(CASE WHEN statut = 'actif' AND date_fin < CURRENT_DATE THEN 1 END) as actifs_expires,
+                COUNT(CASE WHEN prix_total <= 0 THEN 1 END) as prix_invalides,
+                ROUND(AVG(prix_total), 2) as prix_moyen
+            FROM clients
+            GROUP BY type_abonnement
+            ORDER BY nombre_abonnements DESC
+        `);
+
+        // Résumé sécurité
+        const resumeSecurite = await db.query(`
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) as avec_photo,
+                COUNT(DISTINCT email) as emails_uniques,
+                COUNT(CASE WHEN statut NOT IN ('actif', 'inactif', 'expire') THEN 1 END) as statuts_inconnus
+            FROM clients
+        `);
+
+        res.json({
+            success: true,
+            data: {
+                analysePhotos: analysePhotos.rows[0] || {},
+                clientsSansPhoto: clientsSansPhoto.rows,
+                controleAcces: controleAcces.rows,
+                coherenceDonnees: coherenceDonnees.rows,
+                auditSecurite: auditSecurite.rows,
+                resumeSecurite: resumeSecurite.rows[0] || {}
+            }
+        });
+    } catch (err) {
+        console.error('Erreur sécurité:', err);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erreur lors de l\'analyse de sécurité',
+            error: err.message 
+        });
+    }
+});
+
+// ============================================
+// 9. STATISTIQUES GLOBALES
+// ============================================
+
+router.get('/stats-globales', async (req, res) => {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        
+        // Statistiques générales
+        const general = await db.query(`
+            SELECT 
+                COUNT(*) as total_clients,
+                COUNT(DISTINCT email) as clients_uniques,
+                COUNT(CASE WHEN statut = 'actif' AND date_fin >= $1 THEN 1 END) as abonnes_actifs,
+                COUNT(CASE WHEN statut = 'inactif' THEN 1 END) as abonnes_inactifs,
+                COUNT(CASE WHEN statut = 'expire' THEN 1 END) as abonnes_expires,
+                COUNT(DISTINCT type_abonnement) as types_abonnement_differents,
+                COUNT(DISTINCT mode_paiement) as modes_paiement_differents
+            FROM clients
+        `, [today]);
+
+        // Statistiques financières
+        const financier = await db.query(`
+            SELECT 
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as panier_moyen,
+                MIN(prix_total) as prix_min,
+                MAX(prix_total) as prix_max,
+                COUNT(CASE WHEN prix_total < 100 THEN 1 END) as abonnements_bas_prix,
+                COUNT(CASE WHEN prix_total BETWEEN 100 AND 500 THEN 1 END) as abonnements_moyen_prix,
+                COUNT(CASE WHEN prix_total > 500 THEN 1 END) as abonnements_haut_prix
+            FROM clients
+        `);
+
+        // Statistiques d'utilisation
+        const utilisation = await db.query(`
+            SELECT 
+                COUNT(heure_reservation) as reservations_totales,
+                COUNT(DISTINCT EXTRACT(HOUR FROM heure_reservation)) as creneaux_utilises,
+                COUNT(DISTINCT email) as abonnes_actifs_utilisateurs,
+                ROUND(COUNT(heure_reservation) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_utilisation_global
+            FROM clients
+            WHERE statut = 'actif'
+        `);
+
+        // Tendances temporelles
+        const tendancesTemporelles = await db.query(`
+            SELECT 
+                TO_CHAR(date_debut, 'YYYY-MM') as mois,
+                COUNT(*) as nouveaux_abonnes,
+                SUM(prix_total) as revenu_mois,
+                ROUND(AVG(prix_total), 2) as panier_moyen_mois,
+                COUNT(CASE WHEN statut = 'actif' AND date_fin >= CURRENT_DATE THEN 1 END) as actifs_mois
+            FROM clients
+            WHERE date_debut > CURRENT_DATE - INTERVAL '6 months'
+            GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
+            ORDER BY mois DESC
+        `);
+
+        res.json({
+            success: true,
+            data: {
+                general: general.rows[0] || {},
+                financier: financier.rows[0] || {},
+                utilisation: utilisation.rows[0] || {},
+                tendancesTemporelles: tendancesTemporelles.rows
+            }
+        });
+    } catch (err) {
+        console.error('Erreur stats globales:', err);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erreur lors de la récupération des statistiques globales',
+            error: err.message 
+        });
+    }
+});
+
+// ============================================
+// 10. ABONNÉS À RELANCER
 // ============================================
 
 router.get('/abonnes-a-relancer', async (req, res) => {
@@ -925,7 +1133,7 @@ router.get('/abonnes-a-relancer', async (req, res) => {
 });
 
 // ============================================
-// 9. ANALYSE PAR TYPE D'ABONNEMENT
+// 11. ANALYSE PAR TYPE D'ABONNEMENT
 // ============================================
 
 router.get('/analyse-par-type', async (req, res) => {
@@ -934,7 +1142,7 @@ router.get('/analyse-par-type', async (req, res) => {
         const dateFuture30 = getDateInFuture(30);
         
         // Analyse par type
-        const analyseParType = await db.query(`
+        const analyseDetaillee = await db.query(`
             SELECT 
                 type_abonnement,
                 COUNT(*) as total_abonnes,
@@ -952,7 +1160,7 @@ router.get('/analyse-par-type', async (req, res) => {
         `, [today, dateFuture30]);
 
         // Distribution
-        const distributionType = await db.query(`
+        const distribution = await db.query(`
             SELECT 
                 type_abonnement,
                 COUNT(*) as nombre,
@@ -965,7 +1173,7 @@ router.get('/analyse-par-type', async (req, res) => {
         `);
 
         // Évolution
-        const evolutionParType = await db.query(`
+        const evolution = await db.query(`
             SELECT 
                 TO_CHAR(date_debut, 'YYYY-MM') as mois,
                 type_abonnement,
@@ -980,10 +1188,9 @@ router.get('/analyse-par-type', async (req, res) => {
         res.json({
             success: true,
             data: {
-                analyseDetaillee: analyseParType.rows,
-                distribution: distributionType.rows,
-                evolution: evolutionParType.rows,
-                topClientsParType: []
+                analyseDetaillee: analyseDetaillee.rows,
+                distribution: distribution.rows,
+                evolution: evolution.rows
             }
         });
     } catch (err) {
@@ -997,79 +1204,7 @@ router.get('/analyse-par-type', async (req, res) => {
 });
 
 // ============================================
-// 10. STATISTIQUES GLOBALES
-// ============================================
-
-router.get('/stats-globales', async (req, res) => {
-    try {
-        const today = new Date().toISOString().split('T')[0];
-        
-        // Statistiques générales
-        const statsGeneralResult = await db.query(`
-            SELECT 
-                COUNT(*) as total_clients,
-                COUNT(DISTINCT email) as clients_uniques,
-                COUNT(CASE WHEN statut = 'actif' AND date_fin >= $1 THEN 1 END) as abonnes_actifs,
-                COUNT(CASE WHEN statut = 'inactif' THEN 1 END) as abonnes_inactifs,
-                COUNT(DISTINCT type_abonnement) as types_abonnement_differents
-            FROM clients
-        `, [today]);
-
-        // Statistiques financières
-        const statsFinancierResult = await db.query(`
-            SELECT 
-                COALESCE(SUM(prix_total), 0) as revenu_total,
-                COALESCE(AVG(prix_total), 0) as panier_moyen,
-                MIN(prix_total) as prix_min,
-                MAX(prix_total) as prix_max
-            FROM clients
-        `);
-
-        // Statistiques d'utilisation
-        const statsUtilisationResult = await db.query(`
-            SELECT 
-                COUNT(heure_reservation) as reservations_totales,
-                COUNT(DISTINCT EXTRACT(HOUR FROM heure_reservation)) as creneaux_utilises,
-                COUNT(DISTINCT email) as abonnes_actifs_utilisateurs,
-                ROUND(COUNT(heure_reservation) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_utilisation_global
-            FROM clients
-            WHERE statut = 'actif'
-        `);
-
-        // Tendances temporelles
-        const tendancesTemporelles = await db.query(`
-            SELECT 
-                TO_CHAR(date_debut, 'YYYY-MM') as mois,
-                COUNT(*) as nouveaux_abonnes,
-                SUM(prix_total) as revenu_mois,
-                ROUND(AVG(prix_total), 2) as panier_moyen_mois
-            FROM clients
-            WHERE date_debut > CURRENT_DATE - INTERVAL '6 months'
-            GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
-            ORDER BY mois DESC
-        `);
-
-        res.json({
-            success: true,
-            data: {
-                general: statsGeneralResult.rows[0] || {},
-                financier: statsFinancierResult.rows[0] || {},
-                utilisation: statsUtilisationResult.rows[0] || {},
-                tendancesTemporelles: tendancesTemporelles.rows
-            }
-        });
-    } catch (err) {
-        console.error('Erreur stats globales:', err);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Erreur lors de la récupération des statistiques globales',
-            error: err.message 
-        });
-    }
-});
-
-// ============================================
-// 11. SYSTÈME DE SANTÉ GLOBAL
+// 12. SYSTÈME DE SANTÉ GLOBAL
 // ============================================
 
 router.get('/systeme-sante-global', async (req, res) => {
@@ -1162,6 +1297,41 @@ router.get('/systeme-sante-global', async (req, res) => {
         res.status(500).json({ 
             success: false, 
             message: 'Erreur lors de l\'analyse du système de santé',
+            error: err.message 
+        });
+    }
+});
+
+// ============================================
+// ROUTE POUR ANALYSE TEMPORELLE (si nécessaire)
+// ============================================
+
+router.get('/analyse-temporelle', async (req, res) => {
+    try {
+        const tendancesTemporelles = await db.query(`
+            SELECT 
+                TO_CHAR(date_debut, 'YYYY-MM') as mois,
+                COUNT(*) as nouveaux_abonnes,
+                SUM(prix_total) as revenu_mois,
+                ROUND(AVG(prix_total), 2) as panier_moyen_mois,
+                COUNT(CASE WHEN statut = 'actif' AND date_fin >= CURRENT_DATE THEN 1 END) as actifs_mois
+            FROM clients
+            WHERE date_debut > CURRENT_DATE - INTERVAL '12 months'
+            GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
+            ORDER BY mois ASC
+        `);
+
+        res.json({
+            success: true,
+            data: {
+                tendancesTemporelles: tendancesTemporelles.rows
+            }
+        });
+    } catch (err) {
+        console.error('Erreur analyse temporelle:', err);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erreur lors de l\'analyse temporelle',
             error: err.message 
         });
     }
