@@ -54,7 +54,7 @@ router.get('/dashboard-principal', async (req, res) => {
         const dateFuture15 = getDateInFuture(15);
         const dateFuture30 = getDateInFuture(30);
         
-        // Requêtes principales
+        // Requêtes principales - COMPTE UNIQUEMENT PAR STATUT
         const [
             totalResult,
             actifsResult,
@@ -69,13 +69,13 @@ router.get('/dashboard-principal', async (req, res) => {
             photoManquanteResult
         ] = await Promise.all([
             db.query('SELECT COUNT(*) as count FROM clients'),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1 AND date_fin >= $2', ['actif', today]),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['actif']),
             db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['inactif']),
             db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['expirer']),
             db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['en attente']),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2 AND statut = $3', [today, dateFuture7, 'actif']),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2 AND statut = $3', [today, dateFuture15, 'actif']),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2 AND statut = $3', [today, dateFuture30, 'actif']),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2', [today, dateFuture7]),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2', [today, dateFuture15]),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2', [today, dateFuture30]),
             db.query('SELECT COALESCE(SUM(prix_total), 0) as total FROM clients WHERE date_debut >= $1', [debutMoisStr]),
             db.query('SELECT COALESCE(SUM(prix_total), 0) as total FROM clients'),
             db.query('SELECT COUNT(*) as count FROM clients WHERE photo_abonne IS NULL OR photo_abonne = \'\'')
@@ -115,8 +115,8 @@ router.get('/dashboard-principal', async (req, res) => {
                 COUNT(*) as total_actifs,
                 COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as avec_reservation
             FROM clients 
-            WHERE statut = $1 AND date_fin >= $2
-        `, ['actif', today]);
+            WHERE statut = $1
+        `, ['actif']);
         
         const totalActifs = parseInt(utilisationResult.rows[0].total_actifs);
         const avecReservation = parseInt(utilisationResult.rows[0].avec_reservation);
@@ -135,6 +135,7 @@ router.get('/dashboard-principal', async (req, res) => {
             WHERE EXISTS (
                 SELECT 1 FROM clients c2 
                 WHERE c2.email = c1.email 
+                AND c2.id != c1.id
                 AND c2.date_debut > c1.date_fin
                 AND EXTRACT(MONTH FROM c2.date_debut) = EXTRACT(MONTH FROM CURRENT_DATE)
                 AND EXTRACT(YEAR FROM c2.date_debut) = EXTRACT(YEAR FROM CURRENT_DATE)
@@ -150,7 +151,7 @@ router.get('/dashboard-principal', async (req, res) => {
                     abonnesInactifs: inactifs,
                     abonnesExpires: expires,
                     abonnesEnAttente: enAttente,
-                    pourcentageActifs: total > 0 ? ((actifs / total) * 100).toFixed(2) : 0,
+                    pourcentageActifs: total > 0 ? parseFloat(((actifs / total) * 100).toFixed(2)) : 0,
                     caMois: caMois,
                     caTotal: caTotal,
                     tauxChurn: parseFloat(tauxChurn),
@@ -189,7 +190,7 @@ router.get('/sante-abonnements', async (req, res) => {
         const dateFuture30 = getDateInFuture(30);
         const datePast30 = getDateInPast(30);
         
-        // Statistiques principales
+        // Statistiques principales - COMPTE UNIQUEMENT PAR STATUT
         const [
             totalResult,
             actifsResult,
@@ -201,22 +202,22 @@ router.get('/sante-abonnements', async (req, res) => {
             jamaisRenouvellesResult
         ] = await Promise.all([
             db.query('SELECT COUNT(*) as count FROM clients'),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1 AND date_fin >= $2', ['actif', today]),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['actif']),
             db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['inactif']),
             db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['expirer']),
             db.query('SELECT COUNT(*) as count FROM clients WHERE statut = $1', ['en attente']),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2 AND statut = $3', [today, dateFuture30, 'actif']),
-            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2 AND statut = $3', [datePast30, today, 'expirer']),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2', [today, dateFuture30]),
+            db.query('SELECT COUNT(*) as count FROM clients WHERE date_fin BETWEEN $1 AND $2', [datePast30, today]),
             db.query(`
                 SELECT COUNT(DISTINCT email) as count FROM clients c1
                 WHERE statut IN ($1, $2)
                 AND NOT EXISTS (
                     SELECT 1 FROM clients c2 
                     WHERE c2.email = c1.email 
+                    AND c2.id != c1.id
                     AND c2.date_debut > c1.date_fin
-                    AND c2.statut IN ($3, $4, $5, $6)
                 )
-            `, ['inactif', 'expirer', 'actif', 'inactif', 'expirer', 'en attente'])
+            `, ['inactif', 'expirer'])
         ]);
 
         const total = parseInt(totalResult.rows[0].count);
@@ -240,35 +241,40 @@ router.get('/sante-abonnements', async (req, res) => {
                 prix_total,
                 statut,
                 CASE 
-                    WHEN statut = $4 THEN 'EXPIRE'
-                    WHEN date_fin BETWEEN $1 AND $2 THEN 'EXPIRE_DANS_7_JOURS'
-                    WHEN date_fin BETWEEN $1 AND $3 THEN 'EXPIRE_DANS_30_JOURS'
+                    WHEN statut = $1 THEN 'EXPIRE'
+                    WHEN date_fin BETWEEN $2 AND $3 THEN 'EXPIRE_DANS_7_JOURS'
+                    WHEN date_fin BETWEEN $2 AND $4 THEN 'EXPIRE_DANS_30_JOURS'
                     ELSE 'AUTRE'
                 END as categorie_relance
             FROM clients 
-            WHERE (
-                statut = $4
-                OR (statut = $5 AND date_fin BETWEEN $1 AND $3)
-            )
-            ORDER BY date_fin ASC
+            WHERE statut IN ($1, $5)
+            OR date_fin BETWEEN $2 AND $4
+            ORDER BY 
+                CASE 
+                    WHEN statut = $1 THEN 1
+                    WHEN date_fin BETWEEN $2 AND $3 THEN 2
+                    WHEN date_fin BETWEEN $2 AND $4 THEN 3
+                    ELSE 4
+                END,
+                date_fin ASC
             LIMIT 100
-        `, [today, dateFuture7, dateFuture30, 'expirer', 'actif']);
+        `, ['expirer', today, dateFuture7, dateFuture30, 'inactif']);
 
         // Statistiques par type d'abonnement
         const statsParType = await db.query(`
             SELECT 
                 type_abonnement,
                 COUNT(*) as total,
-                COUNT(CASE WHEN statut = $1 AND date_fin >= $2 THEN 1 END) as actifs,
-                COUNT(CASE WHEN statut = $3 THEN 1 END) as inactifs,
-                COUNT(CASE WHEN statut = $4 THEN 1 END) as expires,
-                COUNT(CASE WHEN statut = $5 THEN 1 END) as en_attente,
-                COUNT(CASE WHEN date_fin BETWEEN $2 AND $6 AND statut = $1 THEN 1 END) as expirent_bientot,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as actifs,
+                COUNT(CASE WHEN statut = $2 THEN 1 END) as inactifs,
+                COUNT(CASE WHEN statut = $3 THEN 1 END) as expires,
+                COUNT(CASE WHEN statut = $4 THEN 1 END) as en_attente,
+                COUNT(CASE WHEN date_fin BETWEEN $5 AND $6 THEN 1 END) as expirent_bientot,
                 ROUND(AVG(prix_total), 2) as prix_moyen
             FROM clients
             GROUP BY type_abonnement
             ORDER BY total DESC
-        `, ['actif', today, 'inactif', 'expirer', 'en attente', dateFuture30]);
+        `, ['actif', 'inactif', 'expirer', 'en attente', today, dateFuture30]);
 
         res.json({
             success: true,
@@ -282,9 +288,9 @@ router.get('/sante-abonnements', async (req, res) => {
                     bientotExpires,
                     expiresRecemment,
                     jamaisRenouvelles,
-                    pourcentageActifs: total > 0 ? ((actifs / total) * 100).toFixed(2) : 0,
-                    pourcentageExpires: total > 0 ? ((expires / total) * 100).toFixed(2) : 0,
-                    pourcentageARelancer: actifs > 0 ? ((bientotExpires / actifs) * 100).toFixed(2) : 0
+                    pourcentageActifs: total > 0 ? parseFloat(((actifs / total) * 100).toFixed(2)) : 0,
+                    pourcentageExpires: total > 0 ? parseFloat(((expires / total) * 100).toFixed(2)) : 0,
+                    pourcentageARelancer: total > 0 ? parseFloat(((bientotExpires / total) * 100).toFixed(2)) : 0
                 },
                 aRelancer: aRelancerResult.rows,
                 statsParType: statsParType.rows
@@ -318,7 +324,7 @@ router.get('/analyse-revenus', async (req, res) => {
                 WHERE EXTRACT(MONTH FROM date_debut) = EXTRACT(MONTH FROM CURRENT_DATE)
                 AND EXTRACT(YEAR FROM date_debut) = EXTRACT(YEAR FROM CURRENT_DATE)
             `),
-            db.query('SELECT COALESCE(SUM(prix_total), 0) as total FROM clients WHERE statut = $1 AND date_fin >= $2', ['actif', today])
+            db.query('SELECT COALESCE(SUM(prix_total), 0) as total FROM clients WHERE statut = $1', ['actif'])
         ]);
 
         // Revenus par type d'abonnement
@@ -326,11 +332,15 @@ router.get('/analyse-revenus', async (req, res) => {
             SELECT 
                 type_abonnement,
                 COUNT(*) as nombre_abonnes,
-                SUM(prix_total) as revenu_total,
-                AVG(prix_total) as revenu_moyen,
-                MIN(prix_total) as prix_min,
-                MAX(prix_total) as prix_max,
-                ROUND(SUM(prix_total) * 100.0 / NULLIF((SELECT SUM(prix_total) FROM clients), 0), 2) as pourcentage_total
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as revenu_moyen,
+                COALESCE(MIN(prix_total), 0) as prix_min,
+                COALESCE(MAX(prix_total), 0) as prix_max,
+                ROUND(
+                    COALESCE(SUM(prix_total), 0) * 100.0 / 
+                    NULLIF((SELECT SUM(prix_total) FROM clients), 0), 
+                    2
+                ) as pourcentage_total
             FROM clients
             GROUP BY type_abonnement
             ORDER BY revenu_total DESC
@@ -341,9 +351,13 @@ router.get('/analyse-revenus', async (req, res) => {
             SELECT 
                 mode_paiement,
                 COUNT(*) as nombre_transactions,
-                SUM(prix_total) as revenu_total,
-                AVG(prix_total) as montant_moyen,
-                ROUND(SUM(prix_total) * 100.0 / NULLIF((SELECT SUM(prix_total) FROM clients), 0), 2) as pourcentage_total
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as montant_moyen,
+                ROUND(
+                    COALESCE(SUM(prix_total), 0) * 100.0 / 
+                    NULLIF((SELECT SUM(prix_total) FROM clients), 0), 
+                    2
+                ) as pourcentage_total
             FROM clients
             GROUP BY mode_paiement
             ORDER BY revenu_total DESC
@@ -354,9 +368,9 @@ router.get('/analyse-revenus', async (req, res) => {
             SELECT 
                 TO_CHAR(date_debut, 'YYYY-MM') as mois,
                 COUNT(*) as nouveaux_abonnes,
-                SUM(prix_total) as revenu_mois,
-                ROUND(AVG(prix_total), 2) as panier_moyen,
-                COUNT(CASE WHEN statut = $1 AND date_fin >= CURRENT_DATE THEN 1 END) as abonnes_actifs_mois
+                COALESCE(SUM(prix_total), 0) as revenu_mois,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as panier_moyen,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as abonnes_actifs_mois
             FROM clients
             WHERE date_debut >= $2
             GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
@@ -390,8 +404,8 @@ router.get('/analyse-revenus', async (req, res) => {
                     WHEN prix_total > 1000 THEN 'Plus de 1000'
                 END as tranche_prix,
                 COUNT(*) as nombre_abonnes,
-                SUM(prix_total) as revenu_tranche,
-                ROUND(AVG(prix_total), 2) as prix_moyen
+                COALESCE(SUM(prix_total), 0) as revenu_tranche,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as prix_moyen
             FROM clients
             GROUP BY 
                 CASE 
@@ -414,11 +428,18 @@ router.get('/analyse-revenus', async (req, res) => {
             SELECT 
                 type_abonnement,
                 COUNT(*) as clients,
-                SUM(prix_total) as revenu,
-                AVG(prix_total) as panier_moyen,
+                COALESCE(SUM(prix_total), 0) as revenu,
+                COALESCE(AVG(prix_total), 0) as panier_moyen,
                 COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as utilisateurs_actifs,
-                ROUND(COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_utilisation,
-                ROUND(SUM(prix_total) / NULLIF(COUNT(*), 0), 2) as revenu_par_client
+                ROUND(
+                    COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_utilisation,
+                ROUND(
+                    COALESCE(SUM(prix_total), 0) / NULLIF(COUNT(*), 0), 
+                    2
+                ) as revenu_par_client
             FROM clients
             GROUP BY type_abonnement
             ORDER BY revenu_par_client DESC
@@ -466,7 +487,7 @@ router.get('/comportement-abonnes', async (req, res) => {
                 EXTRACT(HOUR FROM heure_reservation) as heure,
                 COUNT(*) as total_reservations,
                 COUNT(DISTINCT email) as clients_uniques,
-                ROUND(AVG(prix_total), 2) as prix_moyen
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as prix_moyen
             FROM clients
             WHERE heure_reservation IS NOT NULL
             GROUP BY EXTRACT(HOUR FROM heure_reservation)
@@ -483,7 +504,7 @@ router.get('/comportement-abonnes', async (req, res) => {
                 COUNT(*) as nombre_reservations,
                 type_abonnement,
                 statut,
-                SUM(prix_total) as montant_total_depense
+                COALESCE(SUM(prix_total), 0) as montant_total_depense
             FROM clients
             WHERE heure_reservation IS NOT NULL
             GROUP BY nom, prenom, email, type_abonnement, statut
@@ -496,15 +517,19 @@ router.get('/comportement-abonnes', async (req, res) => {
             SELECT 
                 type_abonnement,
                 COUNT(*) as total_abonnes,
-                COUNT(heure_reservation) as avec_reservations,
-                ROUND(COUNT(heure_reservation) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_utilisation
+                COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as avec_reservations,
+                ROUND(
+                    COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_utilisation
             FROM clients
             WHERE statut = $1
             GROUP BY type_abonnement
             ORDER BY taux_utilisation DESC
         `, ['actif']);
 
-        // Clients dormants
+        // Clients dormants (actifs sans réservation)
         const clientsDormants = await db.query(`
             SELECT 
                 nom,
@@ -515,23 +540,25 @@ router.get('/comportement-abonnes', async (req, res) => {
                 date_fin,
                 prix_total,
                 statut
-            FROM clients c1
+            FROM clients
             WHERE statut = $1
-            AND date_fin >= $2
             AND heure_reservation IS NULL
             ORDER BY prix_total DESC
             LIMIT 15
-        `, ['actif', today]);
+        `, ['actif']);
 
         // Statistiques comportement
         const statistiquesComportement = await db.query(`
             SELECT 
                 COUNT(DISTINCT email) as total_clients,
                 COUNT(DISTINCT CASE WHEN heure_reservation IS NOT NULL THEN email END) as clients_actifs,
-                ROUND(COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_activation,
-                MODE() WITHIN GROUP (ORDER BY EXTRACT(HOUR FROM heure_reservation)) as heure_populaire,
+                ROUND(
+                    COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_activation,
                 COUNT(DISTINCT EXTRACT(HOUR FROM heure_reservation)) as creneaux_utilises,
-                ROUND(AVG(EXTRACT(HOUR FROM heure_reservation)), 1) as heure_moyenne
+                ROUND(COALESCE(AVG(EXTRACT(HOUR FROM heure_reservation)), 0), 1) as heure_moyenne
             FROM clients
             WHERE statut = $1
         `, ['actif']);
@@ -576,9 +603,13 @@ router.get('/analyse-fidelite', async (req, res) => {
                     ELSE 'VIP (> 2 ans)'
                 END as segment_anciennete,
                 COUNT(*) as nombre_clients,
-                SUM(prix_total) as revenu_segment,
-                ROUND(AVG(prix_total), 2) as panier_moyen,
-                ROUND(SUM(prix_total) * 100.0 / NULLIF((SELECT SUM(prix_total) FROM clients), 0), 2) as pourcentage_revenu,
+                COALESCE(SUM(prix_total), 0) as revenu_segment,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as panier_moyen,
+                ROUND(
+                    COALESCE(SUM(prix_total), 0) * 100.0 / 
+                    NULLIF((SELECT SUM(prix_total) FROM clients), 0), 
+                    2
+                ) as pourcentage_revenu,
                 COUNT(CASE WHEN statut = $1 THEN 1 END) as actifs,
                 COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as utilisateurs_actifs
             FROM clients
@@ -597,15 +628,15 @@ router.get('/analyse-fidelite', async (req, res) => {
         const clientsFideles = await db.query(`
             SELECT 
                 email,
-                nom,
-                prenom,
+                MAX(nom) as nom,
+                MAX(prenom) as prenom,
                 COUNT(*) as nombre_abonnements,
                 MIN(date_debut) as premier_abonnement,
                 MAX(date_fin) as dernier_abonnement,
-                SUM(prix_total) as revenu_total,
-                AVG(prix_total) as panier_moyen
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as panier_moyen
             FROM clients
-            GROUP BY email, nom, prenom
+            GROUP BY email
             HAVING COUNT(*) > 1
             ORDER BY nombre_abonnements DESC, revenu_total DESC
             LIMIT 25
@@ -619,13 +650,18 @@ router.get('/analyse-fidelite', async (req, res) => {
                 COUNT(CASE WHEN EXISTS (
                     SELECT 1 FROM clients c2 
                     WHERE c2.email = clients.email 
+                    AND c2.id != clients.id
                     AND c2.date_debut > clients.date_fin
                 ) THEN 1 END) as renouvellements,
-                ROUND(COUNT(CASE WHEN EXISTS (
-                    SELECT 1 FROM clients c2 
-                    WHERE c2.email = clients.email 
-                    AND c2.date_debut > clients.date_fin
-                ) THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_retention
+                ROUND(
+                    COUNT(CASE WHEN EXISTS (
+                        SELECT 1 FROM clients c2 
+                        WHERE c2.email = clients.email 
+                        AND c2.id != clients.id
+                        AND c2.date_debut > clients.date_fin
+                    ) THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_retention
             FROM clients
             WHERE date_debut > CURRENT_DATE - INTERVAL '12 months'
             GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
@@ -636,16 +672,16 @@ router.get('/analyse-fidelite', async (req, res) => {
         const meilleursClients = await db.query(`
             SELECT 
                 email,
-                nom,
-                prenom,
+                MAX(nom) as nom,
+                MAX(prenom) as prenom,
                 COUNT(*) as nombre_abonnements,
-                SUM(prix_total) as revenu_total,
+                COALESCE(SUM(prix_total), 0) as revenu_total,
                 MIN(date_debut) as premier_achat,
                 MAX(date_fin) as dernier_abonnement,
-                type_abonnement as dernier_type_abonnement,
-                statut as statut_actuel
+                MAX(type_abonnement) as dernier_type_abonnement,
+                MAX(statut) as statut_actuel
             FROM clients
-            GROUP BY email, nom, prenom, type_abonnement, statut
+            GROUP BY email
             ORDER BY revenu_total DESC
             LIMIT 30
         `);
@@ -656,7 +692,7 @@ router.get('/analyse-fidelite', async (req, res) => {
                 SELECT 
                     email,
                     COUNT(*) as nombre_abonnements,
-                    SUM(prix_total) as revenu_total,
+                    COALESCE(SUM(prix_total), 0) as revenu_total,
                     MIN(date_debut) as premier_achat,
                     MAX(date_fin) as dernier_abonnement
                 FROM clients
@@ -664,10 +700,14 @@ router.get('/analyse-fidelite', async (req, res) => {
             )
             SELECT 
                 COUNT(*) as total_clients,
-                AVG(nombre_abonnements) as frequence_moyenne,
-                AVG(revenu_total) as revenu_moyen_vie,
+                COALESCE(AVG(nombre_abonnements), 0) as frequence_moyenne,
+                COALESCE(AVG(revenu_total), 0) as revenu_moyen_vie,
                 COUNT(CASE WHEN nombre_abonnements > 1 THEN 1 END) as clients_fideles,
-                ROUND(COUNT(CASE WHEN nombre_abonnements > 1 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_fidelite
+                ROUND(
+                    COUNT(CASE WHEN nombre_abonnements > 1 THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_fidelite
             FROM stats_fidelite
         `);
 
@@ -715,68 +755,65 @@ router.get('/analyse-risques', async (req, res) => {
                 heure_reservation,
                 CASE 
                     WHEN date_fin IS NULL THEN 'DATE_FIN_MANQUANTE'
-                    WHEN statut = $1 AND date_fin >= $2 THEN 'STATUT_INCOHERENT'
-                    WHEN statut = $3 AND date_fin < $2 THEN 'STATUT_INCOHERENT'
                     WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 'PHOTO_MANQUANTE'
                     WHEN prix_total <= 0 THEN 'PRIX_INVALIDE'
+                    WHEN statut NOT IN ($1, $2, $3, $4) THEN 'STATUT_INVALIDE'
                     ELSE 'AUTRE'
                 END as type_probleme,
                 CASE 
                     WHEN date_fin IS NULL THEN 'URGENT'
-                    WHEN statut = $1 AND date_fin >= $2 THEN 'CRITIQUE'
-                    WHEN statut = $3 AND date_fin < $2 THEN 'CRITIQUE'
-                    WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 'HAUTE'
-                    WHEN prix_total <= 0 THEN 'MOYENNE'
+                    WHEN prix_total <= 0 THEN 'HAUTE'
+                    WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 'MOYENNE'
                     ELSE 'BASSE'
                 END as risque_niveau
             FROM clients
             WHERE 
                 date_fin IS NULL 
-                OR (statut = $1 AND date_fin >= $2)
-                OR (statut = $3 AND date_fin < $2)
                 OR photo_abonne IS NULL 
                 OR photo_abonne = ''
                 OR prix_total <= 0
+                OR statut NOT IN ($1, $2, $3, $4)
             ORDER BY 
                 CASE 
                     WHEN date_fin IS NULL THEN 1
-                    WHEN statut = $1 AND date_fin >= $2 THEN 2
-                    WHEN statut = $3 AND date_fin < $2 THEN 2
+                    WHEN prix_total <= 0 THEN 2
                     WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 3
-                    WHEN prix_total <= 0 THEN 4
-                    ELSE 5
+                    ELSE 4
                 END,
                 date_fin DESC
             LIMIT 50
-        `, ['expirer', today, 'actif']);
+        `, ['actif', 'inactif', 'expirer', 'en attente']);
 
         // Statistiques des problèmes
         const resumeProblemes = await db.query(`
             SELECT 
                 COUNT(*) as total_clients,
                 COUNT(CASE WHEN date_fin IS NULL THEN 1 END) as sans_date_fin,
-                COUNT(CASE WHEN (statut = $1 AND date_fin >= $2) OR (statut = $3 AND date_fin < $2) THEN 1 END) as statut_incoherent,
                 COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
                 COUNT(CASE WHEN prix_total <= 0 THEN 1 END) as prix_invalide,
-                ROUND(COUNT(CASE WHEN 
-                    date_fin IS NULL 
-                    OR (statut = $1 AND date_fin >= $2)
-                    OR (statut = $3 AND date_fin < $2)
-                    OR photo_abonne IS NULL 
-                    OR photo_abonne = ''
-                    OR prix_total <= 0
-                THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as pourcentage_problemes
+                COUNT(CASE WHEN statut NOT IN ($1, $2, $3, $4) THEN 1 END) as statut_invalide,
+                ROUND(
+                    COUNT(CASE WHEN 
+                        date_fin IS NULL 
+                        OR photo_abonne IS NULL 
+                        OR photo_abonne = ''
+                        OR prix_total <= 0
+                        OR statut NOT IN ($1, $2, $3, $4)
+                    THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 
+                    2
+                ) as pourcentage_problemes
             FROM clients
-        `, ['expirer', today, 'actif']);
+        `, ['actif', 'inactif', 'expirer', 'en attente']);
 
-        // Doublons potentiels
+        // Doublons potentiels (même email, noms différents)
         const doublons = await db.query(`
             SELECT 
                 email,
                 COUNT(*) as occurrences,
-                STRING_AGG(CONCAT(nom, ' ', prenom, ' (', statut, ')'), ' | ') as noms_statuts,
-                STRING_AGG(type_abonnement, ', ') as types_abonnements,
-                SUM(prix_total) as total_depense
+                STRING_AGG(DISTINCT CONCAT(nom, ' ', prenom), ' | ') as noms,
+                STRING_AGG(DISTINCT statut, ', ') as statuts,
+                STRING_AGG(DISTINCT type_abonnement, ', ') as types_abonnements,
+                COALESCE(SUM(prix_total), 0) as total_depense
             FROM clients
             GROUP BY email
             HAVING COUNT(*) > 1
@@ -789,13 +826,14 @@ router.get('/analyse-risques', async (req, res) => {
             SELECT 
                 ROUND(
                     (COUNT(CASE WHEN date_fin IS NULL THEN 1 END) * 3.0 +
-                     COUNT(CASE WHEN (statut = $1 AND date_fin >= $2) OR (statut = $3 AND date_fin < $2) THEN 1 END) * 5.0 +
                      COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) * 2.0 +
-                     COUNT(CASE WHEN prix_total <= 0 THEN 1 END) * 4.0) / 
-                    NULLIF(COUNT(*) * 10, 0) * 100, 2
+                     COUNT(CASE WHEN prix_total <= 0 THEN 1 END) * 4.0 +
+                     COUNT(CASE WHEN statut NOT IN ($1, $2, $3, $4) THEN 1 END) * 5.0) / 
+                    NULLIF(COUNT(*) * 10, 0) * 100, 
+                    2
                 ) as score_risque
             FROM clients
-        `, ['expirer', today, 'actif']);
+        `, ['actif', 'inactif', 'expirer', 'en attente']);
 
         const scoreRisque = parseFloat(scoreResult.rows[0]?.score_risque || 0);
         let niveauRisque = 'MINIMAL';
@@ -836,7 +874,11 @@ router.get('/securite-controle', async (req, res) => {
                 COUNT(*) as total_clients,
                 COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
                 COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) as avec_photo,
-                ROUND(COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_couverture
+                ROUND(
+                    COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_couverture
             FROM clients
         `);
 
@@ -860,13 +902,14 @@ router.get('/securite-controle', async (req, res) => {
                     WHEN statut = $1 THEN 1 
                     WHEN statut = $2 THEN 2
                     WHEN statut = $3 THEN 3
-                    ELSE 4 
+                    WHEN statut = $4 THEN 4
+                    ELSE 5
                 END,
                 date_debut DESC
             LIMIT 30
-        `, ['actif', 'en attente', 'expirer']);
+        `, ['actif', 'en attente', 'expirer', 'inactif']);
 
-        // Contrôle d'accès
+        // Contrôle d'accès (même email, noms différents)
         const controleAcces = await db.query(`
             SELECT 
                 email,
@@ -885,45 +928,51 @@ router.get('/securite-controle', async (req, res) => {
             SELECT 
                 'EMAILS_INVALIDES' as type_incoherence,
                 COUNT(*) as nombre,
-                STRING_AGG(email, ', ') as exemples
+                STRING_AGG(email, ', ' ORDER BY email LIMIT 5) as exemples
             FROM clients
             WHERE email NOT LIKE '%@%.%'
+            
             UNION ALL
+            
             SELECT 
                 'TELEPHONES_INVALIDES',
                 COUNT(*),
-                STRING_AGG(telephone, ', ')
+                STRING_AGG(telephone, ', ' ORDER BY telephone LIMIT 5)
             FROM clients
-            WHERE telephone IS NULL OR LENGTH(telephone) < 8
+            WHERE telephone IS NULL OR LENGTH(TRIM(telephone)) < 8
+            
             UNION ALL
+            
             SELECT 
                 'DATES_INCOHERENTES',
                 COUNT(*),
-                STRING_AGG(CONCAT(date_debut::text, '->', date_fin::text), ' | ')
+                STRING_AGG(CONCAT(date_debut::text, ' -> ', date_fin::text), ' | ' LIMIT 5)
             FROM clients
             WHERE date_fin < date_debut
+            
             UNION ALL
+            
             SELECT 
-                'STATUTS_INCOHERENTS',
+                'STATUTS_INVALIDES',
                 COUNT(*),
-                STRING_AGG(CONCAT(nom, ' ', prenom, ' (', statut, ')'), ' | ')
+                STRING_AGG(CONCAT(nom, ' ', prenom, ' (', statut, ')'), ' | ' LIMIT 5)
             FROM clients
             WHERE statut NOT IN ($1, $2, $3, $4)
         `, ['actif', 'inactif', 'expirer', 'en attente']);
 
-        // Audit des modifications récentes
+        // Audit par type
         const auditSecurite = await db.query(`
             SELECT 
                 type_abonnement,
                 COUNT(*) as nombre_abonnements,
                 COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
-                COUNT(CASE WHEN statut = $1 AND date_fin < CURRENT_DATE THEN 1 END) as actifs_expires,
                 COUNT(CASE WHEN prix_total <= 0 THEN 1 END) as prix_invalides,
-                ROUND(AVG(prix_total), 2) as prix_moyen
+                COUNT(CASE WHEN statut NOT IN ($1, $2, $3, $4) THEN 1 END) as statut_invalide,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as prix_moyen
             FROM clients
             GROUP BY type_abonnement
             ORDER BY nombre_abonnements DESC
-        `, ['actif']);
+        `, ['actif', 'inactif', 'expirer', 'en attente']);
 
         // Résumé sécurité
         const resumeSecurite = await db.query(`
@@ -931,7 +980,7 @@ router.get('/securite-controle', async (req, res) => {
                 COUNT(*) as total,
                 COUNT(CASE WHEN photo_abonne IS NOT NULL AND photo_abonne != '' THEN 1 END) as avec_photo,
                 COUNT(DISTINCT email) as emails_uniques,
-                COUNT(CASE WHEN statut NOT IN ($1, $2, $3, $4) THEN 1 END) as statuts_inconnus
+                COUNT(CASE WHEN statut NOT IN ($1, $2, $3, $4) THEN 1 END) as statuts_invalides
             FROM clients
         `, ['actif', 'inactif', 'expirer', 'en attente']);
 
@@ -962,29 +1011,27 @@ router.get('/securite-controle', async (req, res) => {
 
 router.get('/stats-globales', async (req, res) => {
     try {
-        const today = new Date().toISOString().split('T')[0];
-        
         // Statistiques générales
         const general = await db.query(`
             SELECT 
                 COUNT(*) as total_clients,
                 COUNT(DISTINCT email) as clients_uniques,
-                COUNT(CASE WHEN statut = $1 AND date_fin >= $2 THEN 1 END) as abonnes_actifs,
-                COUNT(CASE WHEN statut = $3 THEN 1 END) as abonnes_inactifs,
-                COUNT(CASE WHEN statut = $4 THEN 1 END) as abonnes_expires,
-                COUNT(CASE WHEN statut = $5 THEN 1 END) as abonnes_en_attente,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as abonnes_actifs,
+                COUNT(CASE WHEN statut = $2 THEN 1 END) as abonnes_inactifs,
+                COUNT(CASE WHEN statut = $3 THEN 1 END) as abonnes_expires,
+                COUNT(CASE WHEN statut = $4 THEN 1 END) as abonnes_en_attente,
                 COUNT(DISTINCT type_abonnement) as types_abonnement_differents,
                 COUNT(DISTINCT mode_paiement) as modes_paiement_differents
             FROM clients
-        `, ['actif', today, 'inactif', 'expirer', 'en attente']);
+        `, ['actif', 'inactif', 'expirer', 'en attente']);
 
         // Statistiques financières
         const financier = await db.query(`
             SELECT 
                 COALESCE(SUM(prix_total), 0) as revenu_total,
                 COALESCE(AVG(prix_total), 0) as panier_moyen,
-                MIN(prix_total) as prix_min,
-                MAX(prix_total) as prix_max,
+                COALESCE(MIN(prix_total), 0) as prix_min,
+                COALESCE(MAX(prix_total), 0) as prix_max,
                 COUNT(CASE WHEN prix_total < 100 THEN 1 END) as abonnements_bas_prix,
                 COUNT(CASE WHEN prix_total BETWEEN 100 AND 500 THEN 1 END) as abonnements_moyen_prix,
                 COUNT(CASE WHEN prix_total > 500 THEN 1 END) as abonnements_haut_prix
@@ -994,10 +1041,14 @@ router.get('/stats-globales', async (req, res) => {
         // Statistiques d'utilisation
         const utilisation = await db.query(`
             SELECT 
-                COUNT(heure_reservation) as reservations_totales,
+                COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as reservations_totales,
                 COUNT(DISTINCT EXTRACT(HOUR FROM heure_reservation)) as creneaux_utilises,
-                COUNT(DISTINCT email) as abonnes_actifs_utilisateurs,
-                ROUND(COUNT(heure_reservation) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_utilisation_global
+                COUNT(DISTINCT CASE WHEN heure_reservation IS NOT NULL THEN email END) as abonnes_actifs_utilisateurs,
+                ROUND(
+                    COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_utilisation_global
             FROM clients
             WHERE statut = $1
         `, ['actif']);
@@ -1007,9 +1058,9 @@ router.get('/stats-globales', async (req, res) => {
             SELECT 
                 TO_CHAR(date_debut, 'YYYY-MM') as mois,
                 COUNT(*) as nouveaux_abonnes,
-                SUM(prix_total) as revenu_mois,
-                ROUND(AVG(prix_total), 2) as panier_moyen_mois,
-                COUNT(CASE WHEN statut = $1 AND date_fin >= CURRENT_DATE THEN 1 END) as actifs_mois
+                COALESCE(SUM(prix_total), 0) as revenu_mois,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as panier_moyen_mois,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as actifs_mois
             FROM clients
             WHERE date_debut > CURRENT_DATE - INTERVAL '6 months'
             GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
@@ -1056,13 +1107,13 @@ router.get('/abonnes-a-relancer', async (req, res) => {
                 type_abonnement,
                 date_fin,
                 prix_total,
+                statut,
                 'URGENT' as priorite,
                 'Expire dans moins de 7 jours' as motif
             FROM clients
             WHERE date_fin BETWEEN $1 AND $2
-            AND statut = $3
             ORDER BY date_fin ASC
-        `, [today, dateFuture7, 'actif']);
+        `, [today, dateFuture7]);
 
         // Expirent dans 15-30 jours
         const expirent15a30jours = await db.query(`
@@ -1074,13 +1125,13 @@ router.get('/abonnes-a-relancer', async (req, res) => {
                 type_abonnement,
                 date_fin,
                 prix_total,
+                statut,
                 'MOYENNE' as priorite,
                 'Expire dans 15-30 jours' as motif
             FROM clients
             WHERE date_fin BETWEEN $1 AND $2
-            AND statut = $3
             ORDER BY date_fin ASC
-        `, [dateFuture7, dateFuture30, 'actif']);
+        `, [dateFuture7, dateFuture30]);
 
         // Expirés récemment
         const expiresRecemment = await db.query(`
@@ -1092,13 +1143,14 @@ router.get('/abonnes-a-relancer', async (req, res) => {
                 type_abonnement,
                 date_fin,
                 prix_total,
+                statut,
                 'HAUTE' as priorite,
                 'A expiré récemment' as motif
             FROM clients
-            WHERE date_fin BETWEEN $1 AND $2
-            AND statut = $3
+            WHERE statut = $1
+            AND date_fin BETWEEN $2 AND $3
             ORDER BY date_fin DESC
-        `, [datePast30, today, 'expirer']);
+        `, ['expirer', datePast30, today]);
 
         // Inactifs longue durée
         const inactifsLongueDuree = await db.query(`
@@ -1110,8 +1162,9 @@ router.get('/abonnes-a-relancer', async (req, res) => {
                 type_abonnement,
                 date_fin,
                 statut,
+                prix_total,
                 'MOYENNE' as priorite,
-                'Inactif depuis plus de 30 jours' as motif
+                'Inactif depuis longtemps' as motif
             FROM clients
             WHERE statut = $1
             AND date_fin < $2
@@ -1122,12 +1175,12 @@ router.get('/abonnes-a-relancer', async (req, res) => {
         // Statistiques
         const statsRelances = await db.query(`
             SELECT 
-                COUNT(CASE WHEN date_fin BETWEEN $1 AND $2 AND statut = $3 THEN 1 END) as expirent_7j,
-                COUNT(CASE WHEN date_fin BETWEEN $4 AND $5 AND statut = $3 THEN 1 END) as expirent_15a30j,
-                COUNT(CASE WHEN date_fin BETWEEN $6 AND $1 AND statut = $7 THEN 1 END) as expires_recemment,
-                COUNT(CASE WHEN statut = $8 AND date_fin < $6 THEN 1 END) as inactifs_longue_duree
+                COUNT(CASE WHEN date_fin BETWEEN $1 AND $2 THEN 1 END) as expirent_7j,
+                COUNT(CASE WHEN date_fin BETWEEN $3 AND $4 THEN 1 END) as expirent_15a30j,
+                COUNT(CASE WHEN statut = $5 AND date_fin BETWEEN $6 AND $1 THEN 1 END) as expires_recemment,
+                COUNT(CASE WHEN statut = $7 AND date_fin < $6 THEN 1 END) as inactifs_longue_duree
             FROM clients
-        `, [today, dateFuture7, 'actif', dateFuture7, dateFuture30, datePast30, 'expirer', 'inactif']);
+        `, [today, dateFuture7, dateFuture7, dateFuture30, 'expirer', datePast30, 'inactif']);
 
         res.json({
             success: true,
@@ -1170,29 +1223,40 @@ router.get('/analyse-par-type', async (req, res) => {
             SELECT 
                 type_abonnement,
                 COUNT(*) as total_abonnes,
-                COUNT(CASE WHEN statut = $1 AND date_fin >= $2 THEN 1 END) as actifs,
-                COUNT(CASE WHEN statut = $3 THEN 1 END) as inactifs,
-                COUNT(CASE WHEN statut = $4 THEN 1 END) as expires,
-                COUNT(CASE WHEN statut = $5 THEN 1 END) as en_attente,
-                SUM(prix_total) as revenu_total,
-                AVG(prix_total) as prix_moyen,
-                COUNT(heure_reservation) as reservations,
-                ROUND(COUNT(heure_reservation) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_utilisation,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as actifs,
+                COUNT(CASE WHEN statut = $2 THEN 1 END) as inactifs,
+                COUNT(CASE WHEN statut = $3 THEN 1 END) as expires,
+                COUNT(CASE WHEN statut = $4 THEN 1 END) as en_attente,
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as prix_moyen,
+                COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as reservations,
+                ROUND(
+                    COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 
+                    2
+                ) as taux_utilisation,
                 COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
-                COUNT(CASE WHEN date_fin BETWEEN $2 AND $6 THEN 1 END) as expirent_bientot
+                COUNT(CASE WHEN date_fin BETWEEN $5 AND $6 THEN 1 END) as expirent_bientot
             FROM clients
             GROUP BY type_abonnement
             ORDER BY revenu_total DESC
-        `, ['actif', today, 'inactif', 'expirer', 'en attente', dateFuture30]);
+        `, ['actif', 'inactif', 'expirer', 'en attente', today, dateFuture30]);
 
         // Distribution
         const distribution = await db.query(`
             SELECT 
                 type_abonnement,
                 COUNT(*) as nombre,
-                ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM clients), 0), 2) as pourcentage_total,
-                ROUND(SUM(prix_total) * 100.0 / NULLIF((SELECT SUM(prix_total) FROM clients), 0), 2) as pourcentage_revenu,
-                ROUND(AVG(prix_total), 2) as valeur_moyenne
+                ROUND(
+                    COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM clients), 0), 
+                    2
+                ) as pourcentage_total,
+                ROUND(
+                    COALESCE(SUM(prix_total), 0) * 100.0 / 
+                    NULLIF((SELECT SUM(prix_total) FROM clients), 0), 
+                    2
+                ) as pourcentage_revenu,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as valeur_moyenne
             FROM clients
             GROUP BY type_abonnement
             ORDER BY nombre DESC
@@ -1204,7 +1268,7 @@ router.get('/analyse-par-type', async (req, res) => {
                 TO_CHAR(date_debut, 'YYYY-MM') as mois,
                 type_abonnement,
                 COUNT(*) as nouveaux_abonnes,
-                SUM(prix_total) as revenu_mois
+                COALESCE(SUM(prix_total), 0) as revenu_mois
             FROM clients
             WHERE date_debut > CURRENT_DATE - INTERVAL '6 months'
             GROUP BY TO_CHAR(date_debut, 'YYYY-MM'), type_abonnement
@@ -1239,36 +1303,41 @@ router.get('/systeme-sante-global', async (req, res) => {
         const dateFuture30 = getDateInFuture(30);
         
         // Métriques de base
-        const totalResult = await db.query('SELECT COUNT(*) as total FROM clients');
-        const actifsResult = await db.query('SELECT COUNT(*) as actifs FROM clients WHERE statut = $1 AND date_fin >= $2', ['actif', today]);
-        const inactifsResult = await db.query('SELECT COUNT(*) as inactifs FROM clients WHERE statut = $1', ['inactif']);
-        const expiresResult = await db.query('SELECT COUNT(*) as expires FROM clients WHERE statut = $1', ['expirer']);
-        const enAttenteResult = await db.query('SELECT COUNT(*) as en_attente FROM clients WHERE statut = $1', ['en attente']);
-        const expirentBientotResult = await db.query('SELECT COUNT(*) as expirent_bientot FROM clients WHERE date_fin BETWEEN $1 AND $2 AND statut = $3', [today, dateFuture30, 'actif']);
-        const sansPhotoResult = await db.query('SELECT COUNT(*) as sans_photo FROM clients WHERE photo_abonne IS NULL OR photo_abonne = \'\'');
-        const sansReservationResult = await db.query('SELECT COUNT(*) as sans_reservation FROM clients WHERE heure_reservation IS NULL AND statut = $1 AND date_fin >= $2', ['actif', today]);
+        const metriques = await db.query(`
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as actifs,
+                COUNT(CASE WHEN statut = $2 THEN 1 END) as inactifs,
+                COUNT(CASE WHEN statut = $3 THEN 1 END) as expires,
+                COUNT(CASE WHEN statut = $4 THEN 1 END) as en_attente,
+                COUNT(CASE WHEN date_fin BETWEEN $5 AND $6 THEN 1 END) as expirent_bientot,
+                COUNT(CASE WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 1 END) as sans_photo,
+                COUNT(CASE WHEN statut = $1 AND heure_reservation IS NULL THEN 1 END) as sans_reservation
+            FROM clients
+        `, ['actif', 'inactif', 'expirer', 'en attente', today, dateFuture30]);
 
-        const total = parseInt(totalResult.rows[0].total) || 0;
-        const actifs = parseInt(actifsResult.rows[0].actifs) || 0;
-        const inactifs = parseInt(inactifsResult.rows[0].inactifs) || 0;
-        const expires = parseInt(expiresResult.rows[0].expires) || 0;
-        const enAttente = parseInt(enAttenteResult.rows[0].en_attente) || 0;
-        const expirentBientot = parseInt(expirentBientotResult.rows[0].expirent_bientot) || 0;
-        const sansPhoto = parseInt(sansPhotoResult.rows[0].sans_photo) || 0;
-        const sansReservation = parseInt(sansReservationResult.rows[0].sans_reservation) || 0;
+        const m = metriques.rows[0];
+        const total = parseInt(m.total) || 0;
+        const actifs = parseInt(m.actifs) || 0;
+        const inactifs = parseInt(m.inactifs) || 0;
+        const expires = parseInt(m.expires) || 0;
+        const enAttente = parseInt(m.en_attente) || 0;
+        const expirentBientot = parseInt(m.expirent_bientot) || 0;
+        const sansPhoto = parseInt(m.sans_photo) || 0;
+        const sansReservation = parseInt(m.sans_reservation) || 0;
 
         // Calculs
-        const pourcentageActifs = total > 0 ? ((actifs / total) * 100).toFixed(2) : 0;
-        const pourcentageExpires = total > 0 ? ((expires / total) * 100).toFixed(2) : 0;
-        const pourcentagePhotoManquante = total > 0 ? ((sansPhoto / total) * 100).toFixed(2) : 0;
-        const pourcentageSansReservation = actifs > 0 ? ((sansReservation / actifs) * 100).toFixed(2) : 0;
+        const pourcentageActifs = total > 0 ? parseFloat(((actifs / total) * 100).toFixed(2)) : 0;
+        const pourcentageExpires = total > 0 ? parseFloat(((expires / total) * 100).toFixed(2)) : 0;
+        const pourcentagePhotoManquante = total > 0 ? parseFloat(((sansPhoto / total) * 100).toFixed(2)) : 0;
+        const pourcentageSansReservation = actifs > 0 ? parseFloat(((sansReservation / actifs) * 100).toFixed(2)) : 0;
 
         // Score de santé
         let scoreSante = 100;
-        if (parseFloat(pourcentageExpires) > 10) scoreSante -= 20;
-        if (parseFloat(pourcentagePhotoManquante) > 20) scoreSante -= 15;
-        if (parseFloat(pourcentageSansReservation) > 30) scoreSante -= 10;
-        if (parseFloat(pourcentageActifs) < 50) scoreSante -= 25;
+        if (pourcentageExpires > 10) scoreSante -= 20;
+        if (pourcentagePhotoManquante > 20) scoreSante -= 15;
+        if (pourcentageSansReservation > 30) scoreSante -= 10;
+        if (pourcentageActifs < 50) scoreSante -= 25;
         if (expirentBientot > actifs * 0.3) scoreSante -= 10;
         scoreSante = Math.max(0, Math.min(100, scoreSante));
 
@@ -1310,10 +1379,10 @@ router.get('/systeme-sante-global', async (req, res) => {
                     sansReservation
                 },
                 pourcentages: {
-                    actifs: parseFloat(pourcentageActifs),
-                    expires: parseFloat(pourcentageExpires),
-                    photoManquante: parseFloat(pourcentagePhotoManquante),
-                    sansReservation: parseFloat(pourcentageSansReservation)
+                    actifs: pourcentageActifs,
+                    expires: pourcentageExpires,
+                    photoManquante: pourcentagePhotoManquante,
+                    sansReservation: pourcentageSansReservation
                 },
                 scoreSante: Math.round(scoreSante),
                 niveauSante: niveauSante,
@@ -1341,9 +1410,9 @@ router.get('/analyse-temporelle', async (req, res) => {
             SELECT 
                 TO_CHAR(date_debut, 'YYYY-MM') as mois,
                 COUNT(*) as nouveaux_abonnes,
-                SUM(prix_total) as revenu_mois,
-                ROUND(AVG(prix_total), 2) as panier_moyen_mois,
-                COUNT(CASE WHEN statut = $1 AND date_fin >= CURRENT_DATE THEN 1 END) as actifs_mois
+                COALESCE(SUM(prix_total), 0) as revenu_mois,
+                ROUND(COALESCE(AVG(prix_total), 0), 2) as panier_moyen_mois,
+                COUNT(CASE WHEN statut = $1 THEN 1 END) as actifs_mois
             FROM clients
             WHERE date_debut > CURRENT_DATE - INTERVAL '12 months'
             GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
