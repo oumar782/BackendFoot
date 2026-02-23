@@ -69,6 +69,7 @@ router.post("/", async (req, res) => {
     mode_paiement = null,
     photo_abonne = null,
     heure_reservation = null,
+    heure_fin = null,  // NOUVEAU: Heure de fin
     photo_base64 = null
   } = req.body;
 
@@ -119,6 +120,18 @@ router.post("/", async (req, res) => {
     }
   }
 
+  // Validation des heures de réservation
+  if (heure_reservation && heure_fin) {
+    const debut = new Date(`1970-01-01T${heure_reservation}`);
+    const fin = new Date(`1970-01-01T${heure_fin}`);
+    if (debut >= fin) {
+      return res.status(400).json({
+        success: false,
+        message: "L'heure de fin doit être postérieure à l'heure de début"
+      });
+    }
+  }
+
   // Validation du prix total
   if (prix_total !== null && prix_total < 0) {
     return res.status(400).json({
@@ -152,8 +165,9 @@ router.post("/", async (req, res) => {
     const result = await pool.query(
       `INSERT INTO clients 
        (nom, prenom, email, telephone, statut, type_abonnement, 
-        date_debut, date_fin, prix_total, mode_paiement, photo_abonne, heure_reservation) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+        date_debut, date_fin, prix_total, mode_paiement, photo_abonne, 
+        heure_reservation, heure_fin) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
        RETURNING *`,
       [
         nom,
@@ -167,7 +181,8 @@ router.post("/", async (req, res) => {
         prix_total,
         mode_paiement,
         photoUrl,
-        heure_reservation
+        heure_reservation,
+        heure_fin  // NOUVEAU: Heure de fin
       ]
     );
 
@@ -382,6 +397,45 @@ router.get("/abonnement-expire/expires", async (req, res) => {
   }
 });
 
+// READ - Récupérer les clients par heure de réservation
+router.get("/reservation/heure", async (req, res) => {
+  const { heure_debut, heure_fin } = req.query;
+
+  try {
+    let query = "SELECT * FROM clients WHERE heure_reservation IS NOT NULL";
+    const params = [];
+    let paramIndex = 1;
+
+    if (heure_debut && heure_fin) {
+      query += ` AND heure_reservation >= $${paramIndex} AND heure_fin <= $${paramIndex + 1}`;
+      params.push(heure_debut, heure_fin);
+    } else if (heure_debut) {
+      query += ` AND heure_reservation >= $${paramIndex}`;
+      params.push(heure_debut);
+    } else if (heure_fin) {
+      query += ` AND heure_fin <= $${paramIndex}`;
+      params.push(heure_fin);
+    }
+
+    query += " ORDER BY heure_reservation";
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows
+    });
+  } catch (err) {
+    console.error("❌ Erreur lors de la récupération des clients par heure:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur serveur lors de la récupération des clients",
+      error: err.message
+    });
+  }
+});
+
 // UPDATE - Modifier un client
 router.put("/:id", async (req, res) => {
   const id = req.params.id;
@@ -397,7 +451,8 @@ router.put("/:id", async (req, res) => {
     prix_total,
     mode_paiement,
     photo_abonne,
-    heure_reservation
+    heure_reservation,
+    heure_fin  // NOUVEAU: Heure de fin
   } = req.body;
 
   // Validation des champs requis
@@ -447,6 +502,18 @@ router.put("/:id", async (req, res) => {
     }
   }
 
+  // Validation des heures de réservation
+  if (heure_reservation && heure_fin) {
+    const debut = new Date(`1970-01-01T${heure_reservation}`);
+    const fin = new Date(`1970-01-01T${heure_fin}`);
+    if (debut >= fin) {
+      return res.status(400).json({
+        success: false,
+        message: "L'heure de fin doit être postérieure à l'heure de début"
+      });
+    }
+  }
+
   // Validation du prix total
   if (prix_total !== null && prix_total < 0) {
     return res.status(400).json({
@@ -460,8 +527,9 @@ router.put("/:id", async (req, res) => {
       `UPDATE clients 
        SET nom = $1, prenom = $2, email = $3, telephone = $4, statut = $5,
            type_abonnement = $6, date_debut = $7, date_fin = $8, prix_total = $9,
-           mode_paiement = $10, photo_abonne = $11, heure_reservation = $12
-       WHERE idclient = $13 
+           mode_paiement = $10, photo_abonne = $11, heure_reservation = $12,
+           heure_fin = $13
+       WHERE idclient = $14 
        RETURNING *`,
       [
         nom,
@@ -476,6 +544,7 @@ router.put("/:id", async (req, res) => {
         mode_paiement,
         photo_abonne,
         heure_reservation,
+        heure_fin,  // NOUVEAU: Heure de fin
         id
       ]
     );
@@ -668,6 +737,62 @@ router.patch("/:id/abonnement", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Erreur serveur lors de la modification de l'abonnement",
+      error: err.message
+    });
+  }
+});
+
+// UPDATE - Modifier les heures de réservation
+router.patch("/:id/heures-reservation", async (req, res) => {
+  const id = req.params.id;
+  const { heure_reservation, heure_fin } = req.body;
+
+  // Validation des heures
+  if (!heure_reservation || !heure_fin) {
+    return res.status(400).json({
+      success: false,
+      message: "Les heures de début et de fin sont requises"
+    });
+  }
+
+  const debut = new Date(`1970-01-01T${heure_reservation}`);
+  const fin = new Date(`1970-01-01T${heure_fin}`);
+  
+  if (debut >= fin) {
+    return res.status(400).json({
+      success: false,
+      message: "L'heure de fin doit être postérieure à l'heure de début"
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE clients 
+       SET heure_reservation = $1, heure_fin = $2
+       WHERE idclient = $3 
+       RETURNING *`,
+      [heure_reservation, heure_fin, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Client non trouvé"
+      });
+    }
+
+    console.log("✅ Heures de réservation modifiées:", result.rows[0]);
+    
+    res.json({
+      success: true,
+      message: "Heures de réservation modifiées avec succès",
+      data: result.rows[0]
+    });
+  } catch (err) {
+    console.error("❌ Erreur lors de la modification des heures:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur serveur lors de la modification des heures",
       error: err.message
     });
   }
@@ -891,6 +1016,7 @@ router.get("/statistiques/totales", async (req, res) => {
       clientsParStatut,
       clientsParAbonnement,
       revenuTotal,
+      clientsAvecHeures,
     ] = await Promise.all([
       pool.query("SELECT COUNT(*) as total FROM clients"),
       pool.query("SELECT COUNT(*) as actifs FROM clients WHERE statut = 'actif'"),
@@ -898,6 +1024,7 @@ router.get("/statistiques/totales", async (req, res) => {
       pool.query("SELECT statut, COUNT(*) as count FROM clients GROUP BY statut"),
       pool.query("SELECT type_abonnement, COUNT(*) as count FROM clients WHERE type_abonnement IS NOT NULL GROUP BY type_abonnement"),
       pool.query("SELECT COALESCE(SUM(prix_total), 0) as total FROM clients WHERE prix_total IS NOT NULL"),
+      pool.query("SELECT COUNT(*) as avec_heures FROM clients WHERE heure_reservation IS NOT NULL AND heure_fin IS NOT NULL"),
     ]);
 
     const statistiques = {
@@ -906,7 +1033,8 @@ router.get("/statistiques/totales", async (req, res) => {
       inactifs: parseInt(clientsInactifs.rows[0].inactifs),
       parStatut: clientsParStatut.rows,
       parAbonnement: clientsParAbonnement.rows,
-      revenuTotal: parseFloat(revenuTotal.rows[0].total)
+      revenuTotal: parseFloat(revenuTotal.rows[0].total),
+      avecHeuresReservation: parseInt(clientsAvecHeures.rows[0].avec_heures)
     };
 
     res.json({
@@ -948,7 +1076,9 @@ router.get("/:id/carte-info", async (req, res) => {
       nom: client.nom,
       prenom: client.prenom,
       type_abonnement: client.type_abonnement,
-      date_fin: client.date_fin
+      date_fin: client.date_fin,
+      heure_reservation: client.heure_reservation,
+      heure_fin: client.heure_fin
     });
 
     const carteInfo = {
