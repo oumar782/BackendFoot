@@ -208,40 +208,110 @@ router.get('/stats-periodes-annulations', async (req, res) => {
       });
     }
   });
-// 📈 Évolution des annulations sur 12 mois
+// Ajoutez/modifiez cette route dans votre fichier routes/stats.js
+
+// 📈 Évolution des annulations sur 12 mois avec mois courant centré
 router.get('/evolution-annulations', async (req, res) => {
   try {
-    const result = await db.query(`
-      WITH mois_series AS (
-        SELECT generate_series(
-          CURRENT_DATE - INTERVAL '11 months',
-          CURRENT_DATE,
-          '1 month'::interval
-        )::date as mois
-      )
-      SELECT 
-        TO_CHAR(ms.mois, 'YYYY-MM') as periode,
-        TO_CHAR(ms.mois, 'Mon YYYY') as periode_affichage,
-        COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) as annulations,
-        COUNT(CASE WHEN r.statut = 'confirmée' THEN 1 END) as confirmations,
-        COUNT(r.numeroreservations) as total_reservations,
-        COALESCE(SUM(CASE WHEN r.statut = 'annulée' THEN r.tarif ELSE 0 END), 0) as revenus_perdus,
-        ROUND(
-          (COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) * 100.0 / 
-          NULLIF(COUNT(r.numeroreservations), 0)
-          ), 2
-        ) as taux_annulation_mensuel
-      FROM mois_series ms
-      LEFT JOIN reservation r ON 
-        EXTRACT(YEAR FROM r.datereservation) = EXTRACT(YEAR FROM ms.mois)
-        AND EXTRACT(MONTH FROM r.datereservation) = EXTRACT(MONTH FROM ms.mois)
-      GROUP BY ms.mois
-      ORDER BY ms.mois ASC
-    `);
+    const { mois_centre = 'true' } = req.query;
+    
+    let query;
+    
+    if (mois_centre === 'true') {
+      // Mois courant centré : 5 mois avant + mois courant + 6 mois après = 12 mois
+      query = `
+        WITH RECURSIVE mois_series AS (
+          -- Générer les 12 mois avec le mois courant au centre
+          SELECT 
+            DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months' as mois
+          UNION ALL
+          SELECT mois + INTERVAL '1 month'
+          FROM mois_series
+          WHERE mois < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '6 months'
+        )
+        SELECT 
+          TO_CHAR(ms.mois, 'YYYY-MM') as periode,
+          TO_CHAR(ms.mois, 'Mon YYYY') as periode_affichage,
+          EXTRACT(MONTH FROM ms.mois) as numero_mois,
+          EXTRACT(YEAR FROM ms.mois) as annee,
+          COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) as annulations,
+          COUNT(CASE WHEN r.statut = 'confirmée' THEN 1 END) as confirmations,
+          COUNT(r.numeroreservations) as total_reservations,
+          COALESCE(SUM(CASE WHEN r.statut = 'annulée' THEN r.tarif ELSE 0 END), 0) as revenus_perdus,
+          ROUND(
+            (COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) * 100.0 / 
+            NULLIF(COUNT(r.numeroreservations), 0)
+            ), 2
+          ) as taux_annulation_mensuel,
+          -- Indicateur pour le mois courant
+          CASE 
+            WHEN DATE_TRUNC('month', ms.mois) = DATE_TRUNC('month', CURRENT_DATE) 
+            THEN true 
+            ELSE false 
+          END as est_mois_courant
+        FROM mois_series ms
+        LEFT JOIN reservation r ON 
+          DATE_TRUNC('month', r.datereservation) = ms.mois
+        GROUP BY ms.mois
+        ORDER BY ms.mois ASC
+      `;
+    } else {
+      // Requête standard (12 derniers mois)
+      query = `
+        WITH mois_series AS (
+          SELECT generate_series(
+            CURRENT_DATE - INTERVAL '11 months',
+            CURRENT_DATE,
+            '1 month'::interval
+          )::date as mois
+        )
+        SELECT 
+          TO_CHAR(ms.mois, 'YYYY-MM') as periode,
+          TO_CHAR(ms.mois, 'Mon YYYY') as periode_affichage,
+          EXTRACT(MONTH FROM ms.mois) as numero_mois,
+          EXTRACT(YEAR FROM ms.mois) as annee,
+          COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) as annulations,
+          COUNT(CASE WHEN r.statut = 'confirmée' THEN 1 END) as confirmations,
+          COUNT(r.numeroreservations) as total_reservations,
+          COALESCE(SUM(CASE WHEN r.statut = 'annulée' THEN r.tarif ELSE 0 END), 0) as revenus_perdus,
+          ROUND(
+            (COUNT(CASE WHEN r.statut = 'annulée' THEN 1 END) * 100.0 / 
+            NULLIF(COUNT(r.numeroreservations), 0)
+            ), 2
+          ) as taux_annulation_mensuel,
+          CASE 
+            WHEN DATE_TRUNC('month', ms.mois) = DATE_TRUNC('month', CURRENT_DATE) 
+            THEN true 
+            ELSE false 
+          END as est_mois_courant
+        FROM mois_series ms
+        LEFT JOIN reservation r ON 
+          DATE_TRUNC('month', r.datereservation) = ms.mois
+        GROUP BY ms.mois
+        ORDER BY ms.mois ASC
+      `;
+    }
+
+    const result = await db.query(query);
+
+    // Ajouter des métadonnées sur la période analysée
+    const moisCourant = result.rows.find(row => row.est_mois_courant);
+    const indexMoisCourant = result.rows.findIndex(row => row.est_mois_courant);
 
     res.json({
       success: true,
-      data: result.rows
+      data: result.rows,
+      metadata: {
+        type_analyse: mois_centre === 'true' ? 'centre' : 'standard',
+        mois_courant: moisCourant,
+        position_mois_courant: indexMoisCourant + 1,
+        total_mois: result.rows.length,
+        mois_avant: indexMoisCourant,
+        mois_apres: result.rows.length - indexMoisCourant - 1,
+        periode_description: mois_centre === 'true' 
+          ? `Mois courant centré (${indexMoisCourant} mois avant / ${result.rows.length - indexMoisCourant - 1} mois après)`
+          : '12 derniers mois'
+      }
     });
   } catch (error) {
     console.error('❌ Erreur évolution annulations:', error);
@@ -252,7 +322,6 @@ router.get('/evolution-annulations', async (req, res) => {
     });
   }
 });
-
 // 🎯 Analyse des terrains les plus affectés par les annulations
 // 📋 Liste des annulations récentes avec détails complets
 router.get('/annulations-recentes', async (req, res) => {
