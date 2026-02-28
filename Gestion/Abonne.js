@@ -2,622 +2,873 @@ import express from 'express';
 const router = express.Router();
 import db from '../db.js';
 
+// Fonctions utilitaires pour les dates
+const getDateInFuture = (days) => {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return date.toISOString().split('T')[0];
+};
+
+const getDateInPast = (days) => {
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date.toISOString().split('T')[0];
+};
+
 // ============================================
-// 1. KPIs FONDAMENTAUX ET VUE D'ENSEMBLE
+// 1. DASHBOARD EXÉCUTIF ULTIME
 // ============================================
 
-/**
- * @route   GET /api/analytics/dashboard-executif
- * @desc    Vue macro pour la direction (KPIs stratégiques)
- */
-router.get('/dashboard-executif', async (req, res) => {
+router.get('/dashboard-executif-ultime', async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
-        const firstDayOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-        const firstDayOfQuarter = new Date(new Date().getFullYear(), Math.floor(new Date().getMonth() / 3) * 3, 1).toISOString().split('T')[0];
-        const firstDayOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
-        const lastDayOfLastMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 0).toISOString().split('T')[0];
+        const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+        const debutAnnee = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+        const dateFuture30 = getDateInFuture(30);
+        const datePast30 = getDateInPast(30);
+        const datePast90 = getDateInPast(90);
+        const datePast365 = getDateInPast(365);
 
-        // Requêtes parallèles pour les KPIs principaux
+        // 1. MÉTRIQUES FONDAMENTALES
         const [
             totalClients,
-            clientsActifs,
-            clientsActifsMoisPrec,
-            revenuTotal,
-            revenuMensuel,
-            revenuMoisPrecedent,
-            revenuTrimestriel,
-            revenuAnnuel,
+            actifsAujourdhui,
+            nouveauxMois,
+            revenuMois,
+            revenuAnnee,
             panierMoyen,
-            frequenceRenouvellement,
-            topTypeAbonnement,
-            heureReservPlusDemandee,
-            modePaiementPlusRentable,
-            abonneLePlusAncien,
-            abonnePlusGrandDepensier,
-            acquisitionParMois
+            tauxRetention,
+            mrr,
+            arr,
+            churnRate,
+            cac
         ] = await Promise.all([
             db.query('SELECT COUNT(*) as total FROM clients'),
             db.query(`SELECT COUNT(*) as actifs FROM clients WHERE statut = 'actif' AND date_fin >= $1`, [today]),
-            db.query(`SELECT COUNT(*) as actifs_mois_prec FROM clients WHERE statut = 'actif' AND date_fin >= $1 AND date_debut <= $2`, [lastDayOfLastMonth, lastDayOfLastMonth]),
-            db.query('SELECT COALESCE(SUM(prix_total), 0) as total FROM clients'),
-            db.query(`SELECT COALESCE(SUM(prix_total), 0) as mensuel FROM clients WHERE date_debut >= $1`, [firstDayOfMonth]),
-            db.query(`SELECT COALESCE(SUM(prix_total), 0) as mois_precedent FROM clients WHERE date_debut >= $1 AND date_debut < $2`, [firstDayOfMonth, lastDayOfLastMonth]),
-            db.query(`SELECT COALESCE(SUM(prix_total), 0) as trimestriel FROM clients WHERE date_debut >= $1`, [firstDayOfQuarter]),
-            db.query(`SELECT COALESCE(SUM(prix_total), 0) as annuel FROM clients WHERE date_debut >= $1`, [firstDayOfYear]),
-            db.query('SELECT COALESCE(AVG(prix_total), 0) as moyen FROM clients WHERE prix_total > 0'),
-            db.query(`SELECT COALESCE(AVG(nb_abonnements), 0) as frequence FROM (SELECT email, COUNT(*) as nb_abonnements FROM clients GROUP BY email) as sub`),
-            db.query(`SELECT type_abonnement, COUNT(*) as count FROM clients GROUP BY type_abonnement ORDER BY count DESC LIMIT 1`),
-            db.query(`SELECT heure_reservation, COUNT(*) as count FROM clients WHERE heure_reservation IS NOT NULL GROUP BY heure_reservation ORDER BY count DESC LIMIT 1`),
-            db.query(`SELECT mode_paiement, COALESCE(SUM(prix_total), 0) as total_revenu FROM clients WHERE mode_paiement IS NOT NULL GROUP BY mode_paiement ORDER BY total_revenu DESC LIMIT 1`),
-            db.query(`SELECT nom, prenom, email, date_debut FROM clients ORDER BY date_debut ASC LIMIT 1`),
-            db.query(`SELECT nom, prenom, email, SUM(prix_total) as total_depense FROM clients GROUP BY nom, prenom, email ORDER BY total_depense DESC LIMIT 1`),
-            db.query(`SELECT TO_CHAR(date_debut, 'YYYY-MM') as mois, COUNT(*) as nouveaux FROM clients WHERE date_debut > CURRENT_DATE - INTERVAL '12 months' GROUP BY TO_CHAR(date_debut, 'YYYY-MM') ORDER BY mois`)
+            db.query(`SELECT COUNT(*) as nouveaux FROM clients WHERE date_debut >= $1`, [debutMois]),
+            db.query(`SELECT COALESCE(SUM(prix_total), 0) as revenu FROM clients WHERE date_debut >= $1`, [debutMois]),
+            db.query(`SELECT COALESCE(SUM(prix_total), 0) as revenu FROM clients WHERE date_debut >= $1`, [debutAnnee]),
+            db.query(`SELECT COALESCE(AVG(prix_total), 0) as moyen FROM clients WHERE prix_total > 0`),
+            db.query(`
+                SELECT COALESCE(
+                    (SELECT COUNT(DISTINCT email) FROM clients WHERE date_debut > $1 AND statut = 'actif') * 100.0 /
+                    NULLIF((SELECT COUNT(DISTINCT email) FROM clients WHERE date_debut > $2), 0), 0
+                ) as taux
+            `, [datePast30, datePast30]),
+            db.query(`
+                SELECT COALESCE(SUM(
+                    CASE
+                        WHEN type_abonnement = 'mensuel' THEN prix_total
+                        WHEN type_abonnement = 'trimestriel' THEN prix_total / 3
+                        WHEN type_abonnement = 'semestriel' THEN prix_total / 6
+                        WHEN type_abonnement = 'annuel' THEN prix_total / 12
+                        ELSE 0
+                    END
+                ), 0) as mrr FROM clients WHERE statut = 'actif' AND date_fin >= $1
+            `, [today]),
+            db.query(`SELECT $1 * 12 as arr`, [mrr]),
+            db.query(`
+                SELECT COALESCE(
+                    (SELECT COUNT(*) FROM clients WHERE statut IN ('inactif', 'expire') AND date_fin > $1) * 100.0 /
+                    NULLIF((SELECT COUNT(*) FROM clients WHERE statut = 'actif' AND date_debut > $1), 0), 0
+                ) as churn
+            `, [datePast30]),
+            db.query(`SELECT COALESCE(AVG(prix_total), 0) as cac FROM clients WHERE date_debut > $1`, [datePast30])
         ]);
 
-        const total = parseInt(totalClients.rows[0].total);
-        const actifs = parseInt(clientsActifs.rows[0].actifs);
-        const actifsMoisPrec = parseInt(clientsActifsMoisPrec.rows[0].actifs_mois_prec);
+        // 2. ANALYSE DES TENDANCES
+        const [
+            evolutionHebdo,
+            evolutionHoraire,
+            meilleursClients,
+            clientsRisques,
+            predictionChurn
+        ] = await Promise.all([
+            db.query(`
+                SELECT 
+                    TO_CHAR(date_debut, 'IW') as semaine,
+                    COUNT(*) as inscriptions,
+                    SUM(prix_total) as revenus
+                FROM clients
+                WHERE date_debut > $1
+                GROUP BY TO_CHAR(date_debut, 'IW')
+                ORDER BY semaine DESC
+                LIMIT 8
+            `, [datePast90]),
+            db.query(`
+                SELECT 
+                    EXTRACT(HOUR FROM heure_reservation) as heure,
+                    COUNT(*) as reservations,
+                    AVG(prix_total) as panier_moyen
+                FROM clients
+                WHERE heure_reservation IS NOT NULL
+                GROUP BY EXTRACT(HOUR FROM heure_reservation)
+                ORDER BY reservations DESC
+            `),
+            db.query(`
+                SELECT 
+                    nom, prenom, email,
+                    COUNT(*) as nb_abonnements,
+                    SUM(prix_total) as total_depense,
+                    AVG(prix_total) as panier_moyen,
+                    MAX(date_fin) as dernier_abo
+                FROM clients
+                GROUP BY nom, prenom, email
+                ORDER BY total_depense DESC
+                LIMIT 10
+            `),
+            db.query(`
+                SELECT 
+                    nom, prenom, email,
+                    date_fin,
+                    CASE 
+                        WHEN date_fin - CURRENT_DATE <= 7 THEN 'CRITIQUE'
+                        WHEN date_fin - CURRENT_DATE <= 15 THEN 'URGENT'
+                        WHEN date_fin - CURRENT_DATE <= 30 THEN 'ATTENTION'
+                        ELSE 'OK'
+                    END as niveau_risque
+                FROM clients
+                WHERE statut = 'actif' 
+                AND date_fin BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+                ORDER BY date_fin ASC
+            `),
+            db.query(`
+                WITH prediction_data AS (
+                    SELECT 
+                        email,
+                        COUNT(*) as frequence,
+                        AVG(prix_total) as montant_moyen,
+                        MAX(date_fin) as derniere_date,
+                        CASE WHEN COUNT(*) > 1 THEN 1 ELSE 0 END as a_renouvele
+                    FROM clients
+                    GROUP BY email
+                )
+                SELECT 
+                    COUNT(*) as total_clients,
+                    AVG(CASE WHEN a_renouvele = 1 THEN 1 ELSE 0 END) as taux_renouvellement_moyen,
+                    AVG(frequence) as frequence_moyenne,
+                    STDDEV(frequence) as ecart_type_frequence
+                FROM prediction_data
+            `)
+        ]);
+
+        // 3. ANALYSE FINANCIÈRE AVANCÉE
+        const [
+            ltvParCohorte,
+            mrrParSegment,
+            arrParType,
+            cashflowPrevisionnel
+        ] = await Promise.all([
+            db.query(`
+                WITH cohortes AS (
+                    SELECT 
+                        DATE_TRUNC('month', date_debut) as cohorte,
+                        email,
+                        SUM(prix_total) as valeur_totale
+                    FROM clients
+                    GROUP BY DATE_TRUNC('month', date_debut), email
+                )
+                SELECT 
+                    TO_CHAR(cohorte, 'YYYY-MM') as cohorte,
+                    COUNT(*) as taille_cohorte,
+                    AVG(valeur_totale) as ltv_moyenne,
+                    SUM(valeur_totale) as revenu_total_cohorte
+                FROM cohortes
+                GROUP BY cohorte
+                ORDER BY cohorte DESC
+                LIMIT 12
+            `),
+            db.query(`
+                SELECT 
+                    CASE 
+                        WHEN prix_total < 100 THEN 'Petit budget'
+                        WHEN prix_total < 300 THEN 'Budget moyen'
+                        WHEN prix_total < 500 THEN 'Budget élevé'
+                        ELSE 'Premium'
+                    END as segment,
+                    COUNT(*) as clients,
+                    SUM(prix_total) as mrr_segment,
+                    AVG(prix_total) as panier_moyen
+                FROM clients
+                WHERE statut = 'actif'
+                GROUP BY 
+                    CASE 
+                        WHEN prix_total < 100 THEN 'Petit budget'
+                        WHEN prix_total < 300 THEN 'Budget moyen'
+                        WHEN prix_total < 500 THEN 'Budget élevé'
+                        ELSE 'Premium'
+                    END
+            `),
+            db.query(`
+                SELECT 
+                    type_abonnement,
+                    COUNT(*) as nb_abonnements,
+                    SUM(prix_total) as arr_type,
+                    AVG(prix_total) as prix_moyen,
+                    COUNT(DISTINCT email) as clients_uniques
+                FROM clients
+                WHERE statut = 'actif'
+                GROUP BY type_abonnement
+                ORDER BY arr_type DESC
+            `),
+            db.query(`
+                WITH prochains_mois AS (
+                    SELECT 
+                        DATE_TRUNC('month', date_fin) as mois_expiration,
+                        SUM(prix_total) as montant_a_renouveler
+                    FROM clients
+                    WHERE statut = 'actif'
+                    AND date_fin > CURRENT_DATE
+                    GROUP BY DATE_TRUNC('month', date_fin)
+                )
+                SELECT 
+                    TO_CHAR(mois_expiration, 'YYYY-MM') as mois,
+                    montant_a_renouveler as revenu_potentiel
+                FROM prochains_mois
+                ORDER BY mois_expiration
+                LIMIT 6
+            `)
+        ]);
+
+        // 4. ANALYSE COMPORTEMENTALE
+        const [
+            heuresAffluence,
+            dureeMoyenneSeance,
+            tauxFidelisation,
+            satisfactionClient
+        ] = await Promise.all([
+            db.query(`
+                SELECT 
+                    EXTRACT(HOUR FROM heure_reservation) as heure,
+                    COUNT(*) as nb_reservations,
+                    AVG(EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600) as duree_moyenne
+                FROM clients
+                WHERE heure_reservation IS NOT NULL
+                GROUP BY EXTRACT(HOUR FROM heure_reservation)
+                ORDER BY nb_reservations DESC
+            `),
+            db.query(`
+                SELECT 
+                    AVG(EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600) as duree_moyenne,
+                    MAX(EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600) as duree_max,
+                    MIN(EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600) as duree_min
+                FROM clients
+                WHERE heure_reservation IS NOT NULL
+            `),
+            db.query(`
+                SELECT 
+                    CASE 
+                        WHEN COUNT(*) > 3 THEN 'Très fidèle'
+                        WHEN COUNT(*) = 2 THEN 'Fidèle'
+                        WHEN COUNT(*) = 1 THEN 'Nouveau'
+                        ELSE 'Occasionnel'
+                    END as niveau_fidelite,
+                    COUNT(*) as nb_clients,
+                    AVG(prix_total) as depense_moyenne
+                FROM (
+                    SELECT email, COUNT(*) as nb_achats
+                    FROM clients
+                    GROUP BY email
+                ) as stats
+                GROUP BY 
+                    CASE 
+                        WHEN nb_achats > 3 THEN 'Très fidèle'
+                        WHEN nb_achats = 2 THEN 'Fidèle'
+                        WHEN nb_achats = 1 THEN 'Nouveau'
+                        ELSE 'Occasionnel'
+                    END
+            `),
+            db.query(`
+                SELECT 
+                    ROUND(AVG(CASE 
+                        WHEN heure_reservation IS NOT NULL AND prix_total > 0 THEN 4.5
+                        WHEN heure_reservation IS NOT NULL THEN 4.0
+                        WHEN prix_total > 100 THEN 3.5
+                        ELSE 3.0
+                    END), 1) as indice_satisfaction_estime
+                FROM clients
+            `)
+        ]);
 
         res.json({
             success: true,
+            timestamp: new Date().toISOString(),
             data: {
-                kpis_strategiques: {
-                    parc_clients: {
-                        total,
-                        actifs,
-                        inactifs: total - actifs,
-                        taux_evolution_mensuel_actifs: actifsMoisPrec > 0 ? ((actifs - actifsMoisPrec) / actifsMoisPrec * 100).toFixed(2) + '%' : 'N/A'
-                    },
-                    revenus: {
-                        total: parseFloat(revenuTotal.rows[0].total),
-                        mensuel: parseFloat(revenuMensuel.rows[0].mensuel),
-                        trimestriel: parseFloat(revenuTrimestriel.rows[0].trimestriel),
-                        annuel: parseFloat(revenuAnnuel.rows[0].annuel),
-                        variation_mensuelle: {
-                            valeur: parseFloat(revenuMoisPrecedent.rows[0].mois_precedent),
-                            evolution: parseFloat(revenuMoisPrecedent.rows[0].mois_precedent) > 0 ?
-                                ((parseFloat(revenuMensuel.rows[0].mensuel) - parseFloat(revenuMoisPrecedent.rows[0].mois_precedent)) / parseFloat(revenuMoisPrecedent.rows[0].mois_precedent) * 100).toFixed(2) + '%'
-                                : 'N/A'
-                        }
-                    },
-                    indicateurs_performance: {
-                        panier_moyen: parseFloat(panierMoyen.rows[0].moyen),
-                        frequence_renouvellement_moyenne: parseFloat(frequenceRenouvellement.rows[0].frequence).toFixed(2),
-                        top_abonnement: topTypeAbonnement.rows[0]?.type_abonnement || 'Non déterminé',
-                        heure_pointe: heureReservPlusDemandee.rows[0]?.heure_reservation || 'Non déterminée',
-                        moyen_paiement_star: modePaiementPlusRentable.rows[0]?.mode_paiement || 'Non déterminé',
-                    }
-                },
-                tops: {
-                    abonne_le_plus_ancien: abonneLePlusAncien.rows[0] || null,
-                    abonne_plus_gros_depensier: abonnePlusGrandDepensier.rows[0] || null
+                kpis_critiques: {
+                    total_abonnes: parseInt(totalClients.rows[0].total),
+                    actifs_ajd: parseInt(actifsAujourdhui.rows[0].actifs),
+                    nouveaux_mois: parseInt(nouveauxMois.rows[0].nouveaux),
+                    revenu_mois: parseFloat(revenuMois.rows[0].revenu),
+                    revenu_annee: parseFloat(revenuAnnee.rows[0].revenu),
+                    panier_moyen: parseFloat(panierMoyen.rows[0].moyen).toFixed(2),
+                    taux_retention: parseFloat(tauxRetention.rows[0].taux).toFixed(2) + '%',
+                    mrr: parseFloat(mrr.rows[0].mrr).toFixed(2),
+                    arr: parseFloat(arr.rows[0].arr).toFixed(2),
+                    churn_rate: parseFloat(churnRate.rows[0].churn).toFixed(2) + '%',
+                    cac_estime: parseFloat(cac.rows[0].cac).toFixed(2)
                 },
                 tendances: {
-                    acquisition_12_mois: acquisitionParMois.rows
+                    hebdomadaires: evolutionHebdo.rows,
+                    horaires: heuresAffluence.rows,
+                    meilleurs_clients: meilleursClients.rows,
+                    clients_a_risque: clientsRisques.rows
+                },
+                financier: {
+                    ltv_par_cohorte: ltvParCohorte.rows,
+                    mrr_par_segment: mrrParSegment.rows,
+                    arr_par_type: arrParType.rows,
+                    cashflow_previsionnel: cashflowPrevisionnel.rows
+                },
+                comportemental: {
+                    heures_affluence: heuresAffluence.rows,
+                    duree_moyenne_seance: dureeMoyenneSeance.rows[0],
+                    taux_fidelisation: tauxFidelisation.rows,
+                    satisfaction_client: satisfactionClient.rows[0].indice_satisfaction_estime
+                },
+                predictions: {
+                    churn_prediction: predictionChurn.rows[0],
+                    recommandations: genererRecommandations({
+                        churn: parseFloat(churnRate.rows[0].churn),
+                        retention: parseFloat(tauxRetention.rows[0].taux),
+                        satisfaction: satisfactionClient.rows[0].indice_satisfaction_estime
+                    })
                 }
             }
         });
-
     } catch (err) {
-        console.error('Erreur Dashboard Exécutif:', err);
-        res.status(500).json({ success: false, message: 'Erreur lors du calcul des KPIs stratégiques', error: err.message });
+        console.error('Erreur Dashboard Exécutif Ultime:', err);
+        res.status(500).json({ success: false, message: 'Erreur', error: err.message });
     }
 });
 
 // ============================================
-// 2. ANALYSE APPROFONDIE DES REVENUS (MRR, ARPU, Cohortes)
+// 2. ANALYSE PRÉDICTIVE AVANCÉE
 // ============================================
 
-/**
- * @route   GET /api/analytics/revenus-approfondis
- * @desc    Analyse détaillée des revenus : MRR, ARPU, LTV estimée, cohortes mensuelles.
- */
-router.get('/revenus-approfondis', async (req, res) => {
+router.get('/analyse-predictive', async (req, res) => {
     try {
-        const today = new Date().toISOString().split('T')[0];
-
-        // 1. Calcul du MRR (Mensuel Recurring Revenue) - Approximation à partir du prix total
-        // Ici, on fait une approximation simple : on projette le prix total sur une base mensuelle.
-        // Pour une vraie récurrence, il faudrait un champ 'prix_mensuel'.
-        const mrrResult = await db.query(`
-            SELECT COALESCE(SUM(
-                CASE
-                    WHEN type_abonnement = 'mensuel' THEN prix_total
-                    WHEN type_abonnement = 'trimestriel' THEN prix_total / 3.0
-                    WHEN type_abonnement = 'semestriel' THEN prix_total / 6.0
-                    WHEN type_abonnement = 'annuel' THEN prix_total / 12.0
-                    ELSE 0
-                END
-            ), 0) as mrr_estime
-            FROM clients
-            WHERE statut = 'actif' AND date_fin >= $1
-        `, [today]);
-
-        // 2. ARPU (Average Revenue Per User) Global
-        const arpuGlobalResult = await db.query(`
-            SELECT COALESCE(AVG(prix_total), 0) as arpu_global FROM clients WHERE prix_total > 0
-        `);
-
-        // 3. ARPU par statut
-        const arpuParStatutResult = await db.query(`
-            SELECT statut, COALESCE(AVG(prix_total), 0) as arpu, COUNT(*) as nombre
-            FROM clients WHERE prix_total > 0 GROUP BY statut
-        `);
-
-        // 4. Analyse de cohorte mensuelle (sur les 6 derniers mois)
-        const cohorteResult = await db.query(`
-            WITH cohortes AS (
-                SELECT
-                    DATE_TRUNC('month', date_debut) as cohorte_mois,
-                    email
-                FROM clients
-                WHERE date_debut > CURRENT_DATE - INTERVAL '6 months'
-                GROUP BY cohorte_mois, email
-            ),
-            cohorte_activite AS (
-                SELECT
-                    c.cohorte_mois,
-                    c.email,
-                    COUNT(cl.idclient) as nb_abonnements_dans_cohorte
-                FROM cohortes c
-                LEFT JOIN clients cl ON cl.email = c.email AND cl.date_debut >= c.cohorte_mois
-                GROUP BY c.cohorte_mois, c.email
-            )
-            SELECT
-                TO_CHAR(cohorte_mois, 'YYYY-MM') as mois,
-                COUNT(email) as taille_cohorte,
-                SUM(CASE WHEN nb_abonnements_dans_cohorte >= 1 THEN 1 ELSE 0 END) as mois_0,
-                SUM(CASE WHEN nb_abonnements_dans_cohorte >= 2 THEN 1 ELSE 0 END) as mois_1,
-                SUM(CASE WHEN nb_abonnements_dans_cohorte >= 3 THEN 1 ELSE 0 END) as mois_2
-            FROM cohorte_activite
-            GROUP BY cohorte_mois
-            ORDER BY cohorte_mois DESC
-        `);
-
-        // 5. LTV Estimée (Customer Lifetime Value) très simplifiée
-        // LTV = (Valeur moyenne d'un achat * Fréquence d'achat moyenne) * Durée de vie moyenne estimée
-        const ltvData = await db.query(`
-            WITH client_stats AS (
-                SELECT
+        // 1. PRÉDICTION DE CHURN (modèle simplifié)
+        const facteursChurn = await db.query(`
+            WITH profils_clients AS (
+                SELECT 
                     email,
-                    AVG(prix_total) as panier_moyen_client,
-                    COUNT(*) as nb_achats
+                    COUNT(*) as nb_abonnements,
+                    AVG(prix_total) as montant_moyen,
+                    MAX(date_fin) as derniere_date,
+                    CASE 
+                        WHEN MAX(date_fin) < CURRENT_DATE - INTERVAL '90 days' THEN 1
+                        ELSE 0
+                    END as a_churn
                 FROM clients
                 GROUP BY email
             )
-            SELECT
-                COALESCE(AVG(panier_moyen_client * nb_achats), 0) as ltv_estimee
-            FROM client_stats
+            SELECT 
+                AVG(CASE WHEN a_churn = 1 THEN nb_abonnements ELSE NULL END) as nb_abonnements_churn,
+                AVG(CASE WHEN a_churn = 0 THEN nb_abonnements ELSE NULL END) as nb_abonnements_fidele,
+                AVG(CASE WHEN a_churn = 1 THEN montant_moyen ELSE NULL END) as montant_moyen_churn,
+                AVG(CASE WHEN a_churn = 0 THEN montant_moyen ELSE NULL END) as montant_moyen_fidele,
+                COUNT(CASE WHEN a_churn = 1 THEN 1 END) as total_churn,
+                COUNT(CASE WHEN a_churn = 0 THEN 1 END) as total_fidele
+            FROM profils_clients
+        `);
+
+        // 2. PRÉDICTION DE VALEUR À VIE (LTV)
+        const predictionLTV = await db.query(`
+            WITH historique_achats AS (
+                SELECT 
+                    email,
+                    COUNT(*) as frequence,
+                    AVG(prix_total) as ticket_moyen,
+                    EXTRACT(DAY FROM (CURRENT_DATE - MIN(date_debut))) as anciennete_jours,
+                    SUM(prix_total) as ltv_actuelle
+                FROM clients
+                GROUP BY email
+            )
+            SELECT 
+                AVG(frequence) as frequence_moyenne,
+                AVG(ticket_moyen) as ticket_moyen_global,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ltv_actuelle) as ltv_mediane,
+                PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY ltv_actuelle) as ltv_top_10,
+                AVG(ltv_actuelle) as ltv_moyenne,
+                CORR(anciennete_jours, ltv_actuelle) as correlation_anciennete_ltv
+            FROM historique_achats
+        `);
+
+        // 3. PRÉDICTION DES TENDANCES SAISONNIÈRES
+        const tendancesSaison = await db.query(`
+            WITH saisons AS (
+                SELECT 
+                    EXTRACT(MONTH FROM date_debut) as mois,
+                    EXTRACT(YEAR FROM date_debut) as annee,
+                    COUNT(*) as inscriptions,
+                    SUM(prix_total) as revenus
+                FROM clients
+                GROUP BY EXTRACT(MONTH FROM date_debut), EXTRACT(YEAR FROM date_debut)
+            )
+            SELECT 
+                mois,
+                AVG(inscriptions) as inscriptions_moyennes,
+                AVG(revenus) as revenus_moyens,
+                STDDEV(inscriptions) as variation_inscriptions,
+                CASE 
+                    WHEN AVG(inscriptions) > (SELECT AVG(inscriptions) * 1.2 FROM saisons) THEN 'HAUTE'
+                    WHEN AVG(inscriptions) < (SELECT AVG(inscriptions) * 0.8 FROM saisons) THEN 'BASSE'
+                    ELSE 'NORMALE'
+                END as saisonnalite
+            FROM saisons
+            GROUP BY mois
+            ORDER BY mois
+        `);
+
+        // 4. IDENTIFICATION DES OPPORTUNITÉS DE CROIX-VENTE
+        const opportunitesCrossSell = await db.query(`
+            SELECT 
+                c1.type_abonnement as type_actuel,
+                c2.type_abonnement as type_recommande,
+                COUNT(*) as nombre_clients_potentiels,
+                AVG(c2.prix_total) as prix_moyen_recommande
+            FROM clients c1
+            CROSS JOIN clients c2
+            WHERE c1.type_abonnement != c2.type_abonnement
+            AND c2.type_abonnement IS NOT NULL
+            AND c1.statut = 'actif'
+            AND c2.prix_total > c1.prix_total
+            GROUP BY c1.type_abonnement, c2.type_abonnement
+            HAVING COUNT(*) > 5
+            ORDER BY nombre_clients_potentiels DESC
+            LIMIT 10
         `);
 
         res.json({
             success: true,
             data: {
-                mrr: {
-                    valeur_estimee: parseFloat(mrrResult.rows[0].mrr_estime).toFixed(2),
-                    methode: "Approximée basée sur le type d'abonnement des actifs"
-                },
-                arpu: {
-                    global: parseFloat(arpuGlobalResult.rows[0].arpu_global).toFixed(2),
-                    par_statut: arpuParStatutResult.rows
-                },
-                ltv: {
-                    estimee: parseFloat(ltvData.rows[0].ltv_estimee).toFixed(2),
-                    note: "Valeur vie client estimée, basée sur la somme des achats par client"
-                },
-                cohortes_6_mois: cohorteResult.rows.map(row => ({
-                    mois: row.mois,
-                    taille_cohorte: parseInt(row.taille_cohorte),
-                    retention: {
-                        mois_0: '100%', // Le mois 0 est toujours 100%
-                        mois_1: row.taille_cohorte > 0 ? ((row.mois_1 / row.taille_cohorte) * 100).toFixed(1) + '%' : '0%',
-                        mois_2: row.taille_cohorte > 0 ? ((row.mois_2 / row.taille_cohorte) * 100).toFixed(1) + '%' : '0%',
+                churn_prediction: {
+                    facteurs_risque: facteursChurn.rows[0],
+                    profil_churn: {
+                        nb_abonnements_moyen: parseFloat(facteursChurn.rows[0]?.nb_abonnements_churn || 0).toFixed(2),
+                        montant_moyen: parseFloat(facteursChurn.rows[0]?.montant_moyen_churn || 0).toFixed(2)
+                    },
+                    profil_fidele: {
+                        nb_abonnements_moyen: parseFloat(facteursChurn.rows[0]?.nb_abonnements_fidele || 0).toFixed(2),
+                        montant_moyen: parseFloat(facteursChurn.rows[0]?.montant_moyen_fidele || 0).toFixed(2)
                     }
-                }))
-            }
-        });
-    } catch (err) {
-        console.error('Erreur Revenus Approfondis:', err);
-        res.status(500).json({ success: false, message: 'Erreur lors de l\'analyse approfondie des revenus', error: err.message });
-    }
-});
-
-// ============================================
-// 3. ANALYSE DU COMPORTEMENT CLIENT (Préférences, Horaires)
-// ============================================
-
-/**
- * @route   GET /api/analytics/comportement-client
- * @desc    Analyse des préférences : abonnements, heures, modes de paiement.
- */
-router.get('/comportement-client', async (req, res) => {
-    try {
-        // 1. Popularité des types d'abonnement (pour graphiques)
-        const populariteAbonnement = await db.query(`
-            SELECT
-                type_abonnement,
-                COUNT(*) as nombre_abonnements,
-                COALESCE(SUM(prix_total), 0) as revenu_genere,
-                ROUND(AVG(prix_total), 2) as prix_moyen
-            FROM clients
-            WHERE type_abonnement IS NOT NULL
-            GROUP BY type_abonnement
-            ORDER BY nombre_abonnements DESC
-        `);
-
-        // 2. Analyse des créneaux horaires de réservation
-        const analyseHoraires = await db.query(`
-            SELECT
-                EXTRACT(HOUR FROM heure_reservation) as heure_debut,
-                COUNT(*) as nombre_reservations,
-                ROUND(AVG(EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600, 2) as duree_moyenne_heures
-            FROM clients
-            WHERE heure_reservation IS NOT NULL AND heure_fin IS NOT NULL
-            GROUP BY heure_debut
-            ORDER BY nombre_reservations DESC
-        `);
-
-        // 3. Distribution des durées de réservation
-        const dureeReservation = await db.query(`
-            SELECT
-                CASE
-                    WHEN EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600 <= 1 THEN '≤ 1h'
-                    WHEN EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600 <= 2 THEN '1-2h'
-                    WHEN EXTRACT(EPOCH FROM (heure_fin - heure_reservation))/3600 <= 3 THEN '2-3h'
-                    ELSE '> 3h'
-                END as tranche_duree,
-                COUNT(*) as nombre
-            FROM clients
-            WHERE heure_reservation IS NOT NULL AND heure_fin IS NOT NULL
-            GROUP BY tranche_duree
-            ORDER BY nombre DESC
-        `);
-
-        // 4. Performance des modes de paiement
-        const performancePaiement = await db.query(`
-            SELECT
-                mode_paiement,
-                COUNT(*) as nombre_transactions,
-                COALESCE(SUM(prix_total), 0) as revenu_total,
-                ROUND(AVG(prix_total), 2) as montant_moyen,
-                COUNT(DISTINCT email) as clients_uniques
-            FROM clients
-            WHERE mode_paiement IS NOT NULL
-            GROUP BY mode_paiement
-            ORDER BY revenu_total DESC
-        `);
-
-        // 5. Analyse croisée : Type d'abonnement vs. Mode de paiement
-        const croisementAbonnementPaiement = await db.query(`
-            SELECT
-                type_abonnement,
-                mode_paiement,
-                COUNT(*) as nombre,
-                COALESCE(SUM(prix_total), 0) as revenu
-            FROM clients
-            WHERE type_abonnement IS NOT NULL AND mode_paiement IS NOT NULL
-            GROUP BY type_abonnement, mode_paiement
-            ORDER BY type_abonnement, revenu DESC
-        `);
-
-        // 6. Jours de la semaine les plus populaires (basé sur la date de début d'abonnement)
-        const joursPopulaires = await db.query(`
-            SELECT
-                TO_CHAR(date_debut, 'Day') as jour_semaine,
-                COUNT(*) as nombre_inscriptions
-            FROM clients
-            GROUP BY TO_CHAR(date_debut, 'Day'), EXTRACT(DOW FROM date_debut)
-            ORDER BY EXTRACT(DOW FROM date_debut)
-        `);
-
-        res.json({
-            success: true,
-            data: {
-                pour_graphiques: {
-                    abonnements: populariteAbonnement.rows,
-                    horaires: analyseHoraires.rows.map(row => ({ ...row, heure_debut: row.heure_debut + 'h' })),
-                    durees: dureeReservation.rows,
-                    jours_inscription: joursPopulaires.rows
                 },
-                insights_strategiques: {
-                    top_abonnement: populariteAbonnement.rows[0] || null,
-                    top_horaire: analyseHoraires.rows[0] ? `${analyseHoraires.rows[0].heure_debut}h` : null,
-                    mode_paiement_plus_rentable: performancePaiement.rows[0] || null,
-                    analyse_croisee: croisementAbonnementPaiement.rows
-                }
+                ltv_prediction: {
+                    moyenne: parseFloat(predictionLTV.rows[0]?.ltv_moyenne || 0).toFixed(2),
+                    mediane: parseFloat(predictionLTV.rows[0]?.ltv_mediane || 0).toFixed(2),
+                    top_10: parseFloat(predictionLTV.rows[0]?.ltv_top_10 || 0).toFixed(2),
+                    correlation_anciennete: parseFloat(predictionLTV.rows[0]?.correlation_anciennete_ltv || 0).toFixed(3)
+                },
+                saisonnalite: tendancesSaison.rows,
+                opportunites_cross_sell: opportunitesCrossSell.rows
             }
         });
-
     } catch (err) {
-        console.error('Erreur Comportement Client:', err);
-        res.status(500).json({ success: false, message: 'Erreur lors de l\'analyse du comportement client', error: err.message });
+        console.error('Erreur Analyse Prédictive:', err);
+        res.status(500).json({ success: false, message: 'Erreur', error: err.message });
     }
 });
 
 // ============================================
-// 4. ANALYSE DES RISQUES ET DE LA RÉTENTION (Prédictif)
+// 3. ANALYSE DE LA SATISFACTION CLIENT
 // ============================================
 
-/**
- * @route   GET /api/analytics/risque-retention
- * @desc    Identification des clients à risque de churn et analyse des signaux faibles.
- */
-router.get('/risque-retention', async (req, res) => {
+router.get('/analyse-satisfaction', async (req, res) => {
     try {
-        const today = new Date().toISOString().split('T')[0];
-        const dateFuture15 = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const datePast90 = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        // 1. INDICATEURS DE SATISFACTION
+        const satisfaction = await db.query(`
+            SELECT 
+                COUNT(*) as total_clients,
+                COUNT(CASE WHEN heure_reservation IS NOT NULL THEN 1 END) as clients_actifs,
+                COUNT(CASE WHEN heure_reservation IS NULL AND statut = 'actif' THEN 1 END) as clients_inactifs,
+                AVG(CASE 
+                    WHEN prix_total > 500 THEN 5
+                    WHEN prix_total > 300 THEN 4
+                    WHEN prix_total > 100 THEN 3
+                    ELSE 2
+                END) as note_moyenne_estimee
+            FROM clients
+        `);
 
-        // 1. Score de risque simple pour les clients actifs
-        const clientsARisque = await db.query(`
-            SELECT
-                idclient,
-                nom,
-                prenom,
-                email,
+        // 2. ANALYSE DES RÉCLAMATIONS POTENTIELLES
+        const pointsDouleur = await db.query(`
+            SELECT 
+                CASE 
+                    WHEN date_fin < CURRENT_DATE AND statut = 'actif' THEN 'INCOHERENCE_STATUT'
+                    WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 'DOSSIER_INCOMPLET'
+                    WHEN prix_total <= 0 THEN 'PRIX_ANORMAL'
+                    WHEN date_fin IS NULL THEN 'DATE_MANQUANTE'
+                END as type_probleme,
+                COUNT(*) as occurrences
+            FROM clients
+            WHERE 
+                (date_fin < CURRENT_DATE AND statut = 'actif')
+                OR (photo_abonne IS NULL OR photo_abonne = '')
+                OR (prix_total <= 0)
+                OR (date_fin IS NULL)
+            GROUP BY 
+                CASE 
+                    WHEN date_fin < CURRENT_DATE AND statut = 'actif' THEN 'INCOHERENCE_STATUT'
+                    WHEN photo_abonne IS NULL OR photo_abonne = '' THEN 'DOSSIER_INCOMPLET'
+                    WHEN prix_total <= 0 THEN 'PRIX_ANORMAL'
+                    WHEN date_fin IS NULL THEN 'DATE_MANQUANTE'
+                END
+        `);
+
+        // 3. TAUX DE RECOMMANDATION ESTIMÉ (NPS)
+        const npsEstime = await db.query(`
+            WITH repartition AS (
+                SELECT 
+                    CASE 
+                        WHEN COUNT(*) > 3 THEN 'Promoteur'
+                        WHEN COUNT(*) = 1 THEN 'Détracteur'
+                        ELSE 'Passif'
+                    END as categorie
+                FROM (
+                    SELECT email, COUNT(*) as nb_achats
+                    FROM clients
+                    GROUP BY email
+                ) as stats
+            )
+            SELECT 
+                COUNT(CASE WHEN categorie = 'Promoteur' THEN 1 END) as promoteurs,
+                COUNT(CASE WHEN categorie = 'Détracteur' THEN 1 END) as detracteurs,
+                COUNT(*) as total_repondants,
+                ROUND(
+                    (COUNT(CASE WHEN categorie = 'Promoteur' THEN 1 END) - 
+                     COUNT(CASE WHEN categorie = 'Détracteur' THEN 1 END)) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 1
+                ) as nps_estime
+            FROM repartition
+        `);
+
+        // 4. ANALYSE DES ABANDONS
+        const analyseAbandons = await db.query(`
+            SELECT 
+                EXTRACT(MONTH FROM date_fin) as mois_abandon,
                 type_abonnement,
-                date_debut,
-                date_fin,
-                prix_total,
-                heure_reservation,
-                (
-                    CASE WHEN date_fin < $1 THEN 50 ELSE 0 END +  -- Si déjà expiré mais actif, risque max
-                    CASE WHEN date_fin BETWEEN $1 AND $2 THEN 30 ELSE 0 END +  -- Expire bientôt
-                    CASE WHEN heure_reservation IS NULL THEN 20 ELSE 0 END +   -- Jamais réservé
-                    CASE WHEN prix_total <= 0 THEN 10 ELSE 0 END               -- Prix invalide
-                ) as score_risque
-            FROM clients
-            WHERE statut = 'actif'
-            HAVING
-                CASE WHEN date_fin < $1 THEN 50 ELSE 0 END +
-                CASE WHEN date_fin BETWEEN $1 AND $2 THEN 30 ELSE 0 END +
-                CASE WHEN heure_reservation IS NULL THEN 20 ELSE 0 END +
-                CASE WHEN prix_total <= 0 THEN 10 ELSE 0 END > 0
-            ORDER BY score_risque DESC
-        `, [today, dateFuture15]);
-
-        // 2. "Clients dormants" : Actifs sans réservation et avec date de fin lointaine
-        const clientsDormants = await db.query(`
-            SELECT nom, prenom, email, date_debut, date_fin, type_abonnement
-            FROM clients
-            WHERE statut = 'actif'
-              AND heure_reservation IS NULL
-              AND date_fin > $1
-            ORDER BY date_debut DESC
-        `, [dateFuture15]);
-
-        // 3. "Clients en voie de disparition" : Inactifs ou Expirés qui n'ont pas renouvelé depuis longtemps
-        const clientsPerdus = await db.query(`
-            SELECT nom, prenom, email, statut, date_fin, prix_total
+                COUNT(*) as nb_abandons,
+                AVG(prix_total) as montant_moyen_perdu
             FROM clients
             WHERE statut IN ('inactif', 'expire')
-              AND date_fin < $1
-            ORDER BY date_fin DESC
-            LIMIT 50
-        `, [datePast90]);
-
-        // 4. Analyse des abonnements qui ne se renouvellent pas (taux d'attrition par type)
-        const attritionParType = await db.query(`
-            SELECT
-                type_abonnement,
-                COUNT(*) as total_abonnes,
-                COUNT(CASE WHEN statut IN ('inactif', 'expire') THEN 1 END) as perdus,
-                ROUND(COUNT(CASE WHEN statut IN ('inactif', 'expire') THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 2) as taux_attrition
-            FROM clients
-            WHERE type_abonnement IS NOT NULL
-            GROUP BY type_abonnement
-            ORDER BY taux_attrition DESC
-        `);
-
-        // 5. "Champions" : Clients les plus fidèles (multiple renouvellements)
-        const championsFidelite = await db.query(`
-            SELECT
-                email,
-                nom,
-                prenom,
-                COUNT(*) as nombre_renouvellements,
-                SUM(prix_total) as revenu_total,
-                MAX(date_fin) as dernier_abonnement
-            FROM clients
-            GROUP BY email, nom, prenom
-            HAVING COUNT(*) > 2  -- Au moins 2 renouvellements
-            ORDER BY nombre_renouvellements DESC, revenu_total DESC
-            LIMIT 20
+            AND date_fin > CURRENT_DATE - INTERVAL '6 months'
+            GROUP BY EXTRACT(MONTH FROM date_fin), type_abonnement
+            ORDER BY mois_abandon DESC, nb_abandons DESC
         `);
 
         res.json({
             success: true,
             data: {
-                alertes: {
-                    clients_a_risque_eleve: clientsARisque.rows.filter(c => c.score_risque >= 70).length,
-                    clients_dormants: clientsDormants.rows.length,
-                    clients_perdus_recemment: clientsPerdus.rows.length
+                indicateurs_satisfaction: {
+                    note_moyenne: parseFloat(satisfaction.rows[0]?.note_moyenne_estimee || 0).toFixed(1) + '/5',
+                    clients_actifs: satisfaction.rows[0]?.clients_actifs,
+                    taux_activite: ((satisfaction.rows[0]?.clients_actifs / satisfaction.rows[0]?.total_clients) * 100).toFixed(1) + '%'
                 },
-                listes: {
-                    a_risque: clientsARisque.rows,
-                    dormants: clientsDormants.rows,
-                    perdus: clientsPerdus.rows,
-                    champions: championsFidelite.rows
+                points_douleur: pointsDouleur.rows,
+                nps: {
+                    score: parseFloat(npsEstime.rows[0]?.nps_estime || 0).toFixed(1),
+                    promoteurs: npsEstime.rows[0]?.promoteurs,
+                    detracteurs: npsEstime.rows[0]?.detracteurs,
+                    interpretation: npsEstime.rows[0]?.nps_estime > 50 ? 'EXCELLENT' :
+                                   npsEstime.rows[0]?.nps_estime > 30 ? 'BON' :
+                                   npsEstime.rows[0]?.nps_estime > 0 ? 'MOYEN' : 'CRITIQUE'
                 },
-                taux_attrition: {
-                    global: clientsARisque.rows.length > 0 ? 'À calculer' : '0%', // Nécessite un suivi dans le temps
-                    par_type_abonnement: attritionParType.rows
-                }
+                analyse_abandons: analyseAbandons.rows,
+                recommandations: genererRecommandationsSatisfaction(pointsDouleur.rows, analyseAbandons.rows)
             }
         });
     } catch (err) {
-        console.error('Erreur Risque et Rétention:', err);
-        res.status(500).json({ success: false, message: 'Erreur lors de l\'analyse des risques et de la rétention', error: err.message });
+        console.error('Erreur Analyse Satisfaction:', err);
+        res.status(500).json({ success: false, message: 'Erreur', error: err.message });
     }
 });
 
 // ============================================
-// 5. ANALYSE DE LA VALEUR CLIENT (RFM)
+// 4. ANALYSE GÉOGRAPHIQUE ET DÉMOGRAPHIQUE
 // ============================================
 
-/**
- * @route   GET /api/analytics/rfm-segmentation
- * @desc    Segmentation RFM (Récence, Fréquence, Montant) des clients.
- */
-router.get('/rfm-segmentation', async (req, res) => {
+router.get('/analyse-demographique', async (req, res) => {
+    try {
+        // 1. RÉPARTITION GÉOGRAPHIQUE (basée sur les indicatifs téléphoniques)
+        const repartitionGeo = await db.query(`
+            SELECT 
+                CASE 
+                    WHEN telephone LIKE '+33%' THEN 'France'
+                    WHEN telephone LIKE '+32%' THEN 'Belgique'
+                    WHEN telephone LIKE '+41%' THEN 'Suisse'
+                    WHEN telephone LIKE '+1%' THEN 'Amérique du Nord'
+                    WHEN telephone LIKE '+44%' THEN 'Royaume-Uni'
+                    WHEN telephone LIKE '+212%' OR telephone LIKE '+213%' OR telephone LIKE '+216%' THEN 'Afrique du Nord'
+                    ELSE 'Autre'
+                END as region,
+                COUNT(*) as nb_clients,
+                SUM(prix_total) as revenu_total,
+                AVG(prix_total) as panier_moyen
+            FROM clients
+            WHERE telephone IS NOT NULL
+            GROUP BY 
+                CASE 
+                    WHEN telephone LIKE '+33%' THEN 'France'
+                    WHEN telephone LIKE '+32%' THEN 'Belgique'
+                    WHEN telephone LIKE '+41%' THEN 'Suisse'
+                    WHEN telephone LIKE '+1%' THEN 'Amérique du Nord'
+                    WHEN telephone LIKE '+44%' THEN 'Royaume-Uni'
+                    WHEN telephone LIKE '+212%' OR telephone LIKE '+213%' OR telephone LIKE '+216%' THEN 'Afrique du Nord'
+                    ELSE 'Autre'
+                END
+            ORDER BY nb_clients DESC
+        `);
+
+        // 2. SEGMENTATION PAR ÂGE (basée sur les emails/domaines)
+        const segmentationAge = await db.query(`
+            SELECT 
+                CASE 
+                    WHEN email LIKE '%gmail%' OR email LIKE '%yahoo%' OR email LIKE '%hotmail%' THEN 'Grand Public'
+                    WHEN email LIKE '%pro%' OR email LIKE '%entreprise%' OR email LIKE '%company%' THEN 'Professionnel'
+                    WHEN email LIKE '%edu%' OR email LIKE '%universite%' OR email LIKE '%student%' THEN 'Étudiant'
+                    ELSE 'Autre'
+                END as segment,
+                COUNT(*) as nb_clients,
+                SUM(prix_total) as revenu_total,
+                AVG(prix_total) as panier_moyen
+            FROM clients
+            GROUP BY 
+                CASE 
+                    WHEN email LIKE '%gmail%' OR email LIKE '%yahoo%' OR email LIKE '%hotmail%' THEN 'Grand Public'
+                    WHEN email LIKE '%pro%' OR email LIKE '%entreprise%' OR email LIKE '%company%' THEN 'Professionnel'
+                    WHEN email LIKE '%edu%' OR email LIKE '%universite%' OR email LIKE '%student%' THEN 'Étudiant'
+                    ELSE 'Autre'
+                END
+            ORDER BY nb_clients DESC
+        `);
+
+        // 3. ANALYSE DES NOMS DE FAMILLE (tendances culturelles)
+        const tendancesCulturelles = await db.query(`
+            SELECT 
+                SUBSTRING(nom FROM 1 FOR 1) as premiere_lettre,
+                COUNT(*) as occurrences,
+                AVG(prix_total) as depense_moyenne
+            FROM clients
+            GROUP BY SUBSTRING(nom FROM 1 FOR 1)
+            ORDER BY occurrences DESC
+            LIMIT 10
+        `);
+
+        // 4. SAISONNALITÉ DES INSCRIPTIONS PAR RÉGION
+        const saisonnaliteRegion = await db.query(`
+            SELECT 
+                CASE 
+                    WHEN telephone LIKE '+33%' THEN 'France'
+                    WHEN telephone LIKE '+32%' THEN 'Belgique'
+                    WHEN telephone LIKE '+41%' THEN 'Suisse'
+                    ELSE 'International'
+                END as region,
+                EXTRACT(MONTH FROM date_debut) as mois,
+                COUNT(*) as inscriptions
+            FROM clients
+            WHERE telephone IS NOT NULL
+            GROUP BY region, EXTRACT(MONTH FROM date_debut)
+            ORDER BY region, mois
+        `);
+
+        res.json({
+            success: true,
+            data: {
+                repartition_geographique: repartitionGeo.rows,
+                segmentation_professionnelle: segmentationAge.rows,
+                tendances_culturelles: tendancesCulturelles.rows,
+                saisonnalite_regionale: saisonnaliteRegion.rows,
+                insights: {
+                    region_plus_rentable: repartitionGeo.rows[0]?.region,
+                    segment_plus_premium: segmentationAge.rows.sort((a,b) => b.panier_moyen - a.panier_moyen)[0]?.segment,
+                    lettre_dominante: tendancesCulturelles.rows[0]?.premiere_lettre
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Erreur Analyse Démographique:', err);
+        res.status(500).json({ success: false, message: 'Erreur', error: err.message });
+    }
+});
+
+// ============================================
+// 5. ANALYSE DE LA PERFORMANCE COMMERCIALE
+// ============================================
+
+router.get('/performance-commerciale', async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
+        const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+        const debutMoisPrecedent = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toISOString().split('T')[0];
+        const finMoisPrecedent = new Date(new Date().getFullYear(), new Date().getMonth(), 0).toISOString().split('T')[0];
 
-        // Calcul des scores RFM pour chaque client
-        const rfmScores = await db.query(`
-            WITH client_rfm AS (
-                SELECT
-                    email,
-                    nom,
-                    prenom,
-                    -- R (Récence) : Nombre de jours depuis la dernière date d'abonnement
-                    EXTRACT(DAY FROM (CURRENT_DATE - MAX(date_fin))) as recence_jours,
-                    -- F (Fréquence) : Nombre total d'abonnements
-                    COUNT(*) as frequence,
-                    -- M (Montant) : Somme totale des achats
-                    SUM(prix_total) as montant_total
-                FROM clients
-                GROUP BY email, nom, prenom
-            )
-            SELECT
-                email,
-                nom,
-                prenom,
-                recence_jours,
-                frequence,
-                montant_total,
-                -- Attribution de scores de 1 à 4 (1 = meilleur, 4 = pire pour R)
-                NTILE(4) OVER (ORDER BY recence_jours ASC) as score_r,
-                NTILE(4) OVER (ORDER BY frequence DESC) as score_f,
-                NTILE(4) OVER (ORDER BY montant_total DESC) as score_m
-            FROM client_rfm
-        `);
+        // 1. PERFORMANCE COMMERCIALE DU MOIS
+        const performanceMois = await db.query(`
+            SELECT 
+                COUNT(*) as nb_ventes,
+                SUM(prix_total) as ca_total,
+                AVG(prix_total) as panier_moyen,
+                COUNT(DISTINCT email) as nouveaux_clients,
+                COUNT(CASE WHEN email IN (
+                    SELECT email FROM clients GROUP BY email HAVING COUNT(*) = 1
+                ) THEN 1 END) as primo_accédants
+            FROM clients
+            WHERE date_debut >= $1
+        `, [debutMois]);
 
-        // Classification des clients en segments RFM
-        const segments = rfmScores.rows.map(client => {
-            const scoreTotal = client.score_r + client.score_f + client.score_m;
-            let segment = 'Autre';
+        // 2. COMPARAISON MOIS PRÉCÉDENT
+        const comparaisonMoisPrec = await db.query(`
+            SELECT 
+                COUNT(*) as nb_ventes,
+                SUM(prix_total) as ca_total,
+                AVG(prix_total) as panier_moyen
+            FROM clients
+            WHERE date_debut BETWEEN $1 AND $2
+        `, [debutMoisPrecedent, finMoisPrecedent]);
 
-            if (client.score_r === 1 && client.score_f === 1 && client.score_m === 1) segment = '⭐ Champions (Meilleurs clients)';
-            else if (client.score_r >= 2 && client.score_f >= 3 && client.score_m >= 3) segment = '💰 Gros Dépensers (À fidéliser)';
-            else if (client.score_r <= 2 && client.score_f <= 2 && client.score_m <= 2) segment = '📈 En croissance (Potentiel)';
-            else if (client.score_r >= 3 && client.score_f <= 2 && client.score_m <= 2) segment = '⚠️ À risque (Fidèles mais plus vus)';
-            else if (client.score_r >= 3 && client.score_f <= 1 && client.score_m <= 1) segment = '❌ Perdus (À reconquérir)';
-            else if (client.score_f === 1 && client.score_m === 1 && client.score_r === 2) segment = '🆕 Nouveaux (À engager)';
-            else if (client.score_f >= 3 && client.score_m >= 3 && client.score_r <= 2) segment = '🏆 Très Fidèles (À récompenser)';
+        // 3. TAUX DE CONVERSION ESTIMÉ
+        const tauxConversion = await db.query(`
+            SELECT 
+                COUNT(CASE WHEN statut = 'actif' THEN 1 END) as convertis,
+                COUNT(CASE WHEN statut = 'en attente' THEN 1 END) as en_attente,
+                ROUND(
+                    COUNT(CASE WHEN statut = 'actif' THEN 1 END) * 100.0 / 
+                    NULLIF(COUNT(*), 0), 1
+                ) as taux_conversion
+            FROM clients
+            WHERE date_debut >= $1
+        `, [debutMois]);
 
-            return { ...client, segment };
-        });
+        // 4. TOP PRODUITS/VENTES
+        const topVentes = await db.query(`
+            SELECT 
+                type_abonnement,
+                COUNT(*) as nb_ventes,
+                SUM(prix_total) as ca_genere,
+                ROUND(AVG(prix_total), 2) as prix_moyen,
+                COUNT(DISTINCT email) as clients_distincts
+            FROM clients
+            WHERE date_debut >= $1
+            GROUP BY type_abonnement
+            ORDER BY ca_genere DESC
+        `, [debutMois]);
 
-        // Compilation par segment
-        const segmentationResult = {};
-        segments.forEach(client => {
-            if (!segmentationResult[client.segment]) {
-                segmentationResult[client.segment] = {
-                    nombre: 0,
-                    revenu_total: 0,
-                    clients: []
-                };
+        // 5. VITESSE DE VENTE
+        const vitesseVente = await db.query(`
+            SELECT 
+                EXTRACT(DOW FROM date_debut) as jour_semaine,
+                COUNT(*) as ventes,
+                AVG(prix_total) as panier_moyen
+            FROM clients
+            WHERE date_debut >= $1
+            GROUP BY EXTRACT(DOW FROM date_debut)
+            ORDER BY ventes DESC
+        `, [debutMois]);
+
+        // 6. PANIER MOYEN PAR TYPE DE CLIENT
+        const panierParType = await db.query(`
+            SELECT 
+                CASE 
+                    WHEN COUNT(*) OVER (PARTITION BY email) > 1 THEN 'Récurrent'
+                    ELSE 'Nouveau'
+                END as type_client,
+                AVG(prix_total) as panier_moyen,
+                COUNT(*) as nb_transactions
+            FROM clients
+            WHERE date_debut >= $1
+            GROUP BY email, prix_total
+        `, [debutMois]);
+
+        res.json({
+            success: true,
+            data: {
+                performance_mois: {
+                    nb_ventes: parseInt(performanceMois.rows[0]?.nb_ventes || 0),
+                    ca_total: parseFloat(performanceMois.rows[0]?.ca_total || 0),
+                    panier_moyen: parseFloat(performanceMois.rows[0]?.panier_moyen || 0).toFixed(2),
+                    nouveaux_clients: parseInt(performanceMois.rows[0]?.nouveaux_clients || 0),
+                    primo_accedants: parseInt(performanceMois.rows[0]?.primo_accédants || 0)
+                },
+                comparaison_mois_precedent: {
+                    evolution_ventes: ((performanceMois.rows[0]?.nb_ventes - comparaisonMoisPrec.rows[0]?.nb_ventes) / comparaisonMoisPrec.rows[0]?.nb_ventes * 100).toFixed(1) + '%',
+                    evolution_ca: ((performanceMois.rows[0]?.ca_total - comparaisonMoisPrec.rows[0]?.ca_total) / comparaisonMoisPrec.rows[0]?.ca_total * 100).toFixed(1) + '%',
+                    evolution_panier: ((performanceMois.rows[0]?.panier_moyen - comparaisonMoisPrec.rows[0]?.panier_moyen) / comparaisonMoisPrec.rows[0]?.panier_moyen * 100).toFixed(1) + '%'
+                },
+                taux_conversion: parseFloat(tauxConversion.rows[0]?.taux_conversion || 0).toFixed(1) + '%',
+                top_ventes: topVentes.rows,
+                vitesse_vente: vitesseVente.rows.map(v => ({
+                    jour: ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'][v.jour_semaine],
+                    ventes: v.ventes,
+                    panier_moyen: v.panier_moyen
+                })),
+                panier_par_type: panierParType.rows,
+                objectifs: {
+                    objectif_mensuel: parseFloat(performanceMois.rows[0]?.ca_total || 0) * 1.2, // Objectif +20%
+                    progression: ((performanceMois.rows[0]?.ca_total || 0) / (performanceMois.rows[0]?.ca_total * 1.2) * 100).toFixed(1) + '%'
+                }
             }
-            segmentationResult[client.segment].nombre++;
-            segmentationResult[client.segment].revenu_total += parseFloat(client.montant_total);
-            segmentationResult[client.segment].clients.push({
-                nom: client.nom,
-                prenom: client.prenom,
-                email: client.email,
-                recence: client.recence_jours,
-                frequence: client.frequence,
-                montant: parseFloat(client.montant_total)
+        });
+    } catch (err) {
+        console.error('Erreur Performance Commerciale:', err);
+        res.status(500).json({ success: false, message: 'Erreur', error: err.message });
+    }
+});
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
+function genererRecommandations(metrics) {
+    const recommandations = [];
+    
+    if (metrics.churn > 10) {
+        recommandations.push({
+            priorite: 'HAUTE',
+            action: 'Mettre en place un programme de fidélisation urgent',
+            impact: 'Réduction du churn de 10-15%'
+        });
+    }
+    
+    if (metrics.retention < 70) {
+        recommandations.push({
+            priorite: 'MOYENNE',
+            action: 'Améliorer l\'onboarding des nouveaux clients',
+            impact: 'Augmentation de la rétention de 5-10%'
+        });
+    }
+    
+    if (metrics.satisfaction < 3.5) {
+        recommandations.push({
+            priorite: 'CRITIQUE',
+            action: 'Lancer une enquête de satisfaction',
+            impact: 'Identifier les points de friction'
+        });
+    }
+    
+    return recommandations;
+}
+
+function genererRecommandationsSatisfaction(pointsDouleur, abandons) {
+    const recommandations = [];
+    
+    pointsDouleur.forEach(point => {
+        if (point.type_probleme === 'INCOHERENCE_STATUT') {
+            recommandations.push({
+                probleme: 'Incohérence de statut',
+                solution: 'Audit manuel des comptes concernés',
+                urgence: 'IMMÉDIATE'
             });
-        });
-
-        res.json({
-            success: true,
-            data: {
-                segments: segmentationResult,
-                recommandations: {
-                    "⭐ Champions (Meilleurs clients)": "Offres exclusives, programme de parrainage.",
-                    "💰 Gros Dépensers (À fidéliser)": "Réductions sur le long terme, contenu premium.",
-                    "📈 En croissance (Potentiel)": "Encourager le renouvellement, offres groupées.",
-                    "⚠️ À risque (Fidèles mais plus vus)": "Campagne de réengagement, email personnalisé.",
-                    "❌ Perdus (À reconquérir)": "Offre de retour spéciale, enquête de satisfaction.",
-                    "🆕 Nouveaux (À engager)": "Onboarding, guide d'utilisation, bienvenue.",
-                    "🏆 Très Fidèles (À récompenser)": "Cadeau d'anniversaire d'abonnement, réduction fidélité."
-                }
-            }
-        });
-
-    } catch (err) {
-        console.error('Erreur Segmentation RFM:', err);
-        res.status(500).json({ success: false, message: 'Erreur lors de la segmentation RFM', error: err.message });
-    }
-});
-
-// ============================================
-// 6. ANALYSE DE L'IMPACT TEMPOREL (Saisonnalité)
-// ============================================
-
-/**
- * @route   GET /api/analytics/saisonnalite
- * @desc    Analyse de la saisonnalité des inscriptions et des revenus.
- */
-router.get('/saisonnalite', async (req, res) => {
-    try {
-        // Comparaison mensuelle sur 2 ans
-        const mensuel2Ans = await db.query(`
-            SELECT
-                EXTRACT(YEAR FROM date_debut) as annee,
-                EXTRACT(MONTH FROM date_debut) as mois,
-                COUNT(*) as inscriptions,
-                COALESCE(SUM(prix_total), 0) as revenus
-            FROM clients
-            WHERE date_debut > CURRENT_DATE - INTERVAL '24 months'
-            GROUP BY annee, mois
-            ORDER BY annee DESC, mois DESC
-        `);
-
-        // Comparaison trimestrielle
-        const trimestriel = await db.query(`
-            SELECT
-                EXTRACT(YEAR FROM date_debut) as annee,
-                EXTRACT(QUARTER FROM date_debut) as trimestre,
-                COUNT(*) as inscriptions,
-                COALESCE(SUM(prix_total), 0) as revenus
-            FROM clients
-            GROUP BY annee, trimestre
-            ORDER BY annee DESC, trimestre DESC
-        `);
-
-        // Meilleurs mois
-        const meilleursMois = await db.query(`
-            SELECT
-                TO_CHAR(date_debut, 'Month') as mois_nom,
-                COUNT(*) as inscriptions,
-                COALESCE(SUM(prix_total), 0) as revenus
-            FROM clients
-            GROUP BY TO_CHAR(date_debut, 'Month'), EXTRACT(MONTH FROM date_debut)
-            ORDER BY revenus DESC
-            LIMIT 3
-        `);
-
-        res.json({
-            success: true,
-            data: {
-                mensuel_2_ans: mensuel2Ans.rows,
-                trimestriel: trimestriel.rows,
-                insights_saisonnalite: {
-                    meilleurs_mois_en_revenu: meilleursMois.rows,
-                    tendance: "Analysez les données mensuelles pour identifier les pics.",
-                    recommandation: "Préparez des campagnes marketing avant vos mois les plus forts."
-                }
-            }
-        });
-
-    } catch (err) {
-        console.error('Erreur Saisonnalité:', err);
-        res.status(500).json({ success: false, message: 'Erreur lors de l\'analyse de la saisonnalité', error: err.message });
-    }
-});
+        }
+        if (point.type_probleme === 'DOSSIER_INCOMPLET') {
+            recommandations.push({
+                probleme: 'Dossiers incomplets',
+                solution: 'Campagne de relance pour photos manquantes',
+                urgence: 'MOYENNE'
+            });
+        }
+    });
+    
+    return recommandations;
+}
 
 export default router;
