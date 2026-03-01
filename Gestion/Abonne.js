@@ -67,7 +67,7 @@ router.get('/analyse-complete', async (req, res) => {
                 COUNT(*) as nouveaux_clients,
                 COALESCE(SUM(prix_total), 0) as revenus_mois
             FROM clients
-            WHERE date_debt::date >= $1::date
+            WHERE date_debut::date >= $1::date
             GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
             ORDER BY mois DESC
             LIMIT 12
