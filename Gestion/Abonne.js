@@ -33,7 +33,6 @@ router.get('/analyse-complete', async (req, res) => {
     try {
         const today = new Date().toISOString().split('T')[0];
         const debutMois = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-        const debutAnnee = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
         const dateFuture7 = getDateInFuture(7);
         const dateFuture15 = getDateInFuture(15);
         const dateFuture30 = getDateInFuture(30);
@@ -60,7 +59,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 2. ÉVOLUTION MENSUELLE (pour courbes) - CORRIGÉ
+        // 2. ÉVOLUTION MENSUELLE (pour courbes)
         // ============================================
         const evolutionMensuelle = await db.query(`
             SELECT 
@@ -75,14 +74,14 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast365]);
 
         // ============================================
-        // 3. ÉVOLUTION DU CHIFFRE D'AFFAIRES MENSUEL COMPARATIF - CORRIGÉ
+        // 3. ÉVOLUTION DU CHIFFRE D'AFFAIRES MENSUEL COMPARATIF
         // ============================================
         const evolutionCAMensuelle = await db.query(`
             WITH ca_mensuel AS (
                 SELECT 
                     TO_CHAR(date_debut, 'YYYY-MM') as mois,
-                    EXTRACT(YEAR FROM date_debt::timestamp) as annee,
-                    EXTRACT(MONTH FROM date_debut::timestamp) as mois_num,
+                    EXTRACT(YEAR FROM date_debut) as annee,
+                    EXTRACT(MONTH FROM date_debut) as mois_num,
                     COALESCE(SUM(prix_total), 0) as ca_mois,
                     COUNT(*) as nombre_ventes,
                     COUNT(DISTINCT email) as nouveaux_clients,
@@ -90,7 +89,7 @@ router.get('/analyse-complete', async (req, res) => {
                     LAG(COALESCE(SUM(prix_total), 0), 12) OVER (ORDER BY MIN(date_debut)) as ca_annee_precedente
                 FROM clients
                 WHERE date_debut >= $1
-                GROUP BY TO_CHAR(date_debut, 'YYYY-MM'), EXTRACT(YEAR FROM date_debut::timestamp), EXTRACT(MONTH FROM date_debut::timestamp)
+                GROUP BY TO_CHAR(date_debut, 'YYYY-MM'), EXTRACT(YEAR FROM date_debut), EXTRACT(MONTH FROM date_debut)
             )
             SELECT 
                 mois,
@@ -123,8 +122,6 @@ router.get('/analyse-complete', async (req, res) => {
                 COUNT(*) as nombre,
                 COALESCE(SUM(prix_total), 0) as revenu_total,
                 COALESCE(AVG(prix_total), 0) as prix_moyen,
-                MIN(prix_total) as prix_minimum,
-                MAX(prix_total) as prix_maximum,
                 COUNT(CASE WHEN statut = 'actif' THEN 1 END) as actifs,
                 COUNT(CASE WHEN statut = 'inactif' THEN 1 END) as inactifs,
                 COUNT(CASE WHEN statut = 'en attente' THEN 1 END) as en_attente,
@@ -166,7 +163,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 7. TAUX DE DÉSABONNEMENT (CHURN) - Synthèse
+        // 7. TAUX DE DÉSABONNEMENT (CHURN)
         // ============================================
         const churnData = await db.query(`
             SELECT 
@@ -177,7 +174,7 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast30]);
 
         // ============================================
-        // 8. ÉTUDE CHURN APPROFONDIE - CORRIGÉE
+        // 8. ÉTUDE CHURN APPROFONDIE
         // ============================================
         const etudeChurn = await db.query(`
             WITH churn_analysis AS (
@@ -250,7 +247,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 10. CLIENT LE PLUS PERFORMANT - CORRIGÉ
+        // 10. CLIENT LE PLUS PERFORMANT
         // ============================================
         const clientPlusPerformant = await db.query(`
             SELECT 
@@ -269,8 +266,7 @@ router.get('/analyse-complete', async (req, res) => {
                     WHEN MAX(date_fin) >= CURRENT_DATE THEN 'Actif'
                     ELSE 'Inactif'
                 END as statut_actuel,
-                (MAX(date_fin) - MIN(date_debut)) as duree_totale_jours,
-                COUNT(CASE WHEN statut = 'actif' THEN 1 END) as abonnements_actifs
+                (MAX(date_fin) - MIN(date_debut)) as duree_totale_jours
             FROM clients
             GROUP BY idclient, nom, prenom, email, telephone, type_abonnement
             ORDER BY total_depense DESC
@@ -278,21 +274,18 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 11. TOP CLIENTS (performance commerciale)
+        // 11. TOP CLIENTS
         // ============================================
         const topClients = await db.query(`
             SELECT 
                 nom,
                 prenom,
                 email,
-                telephone,
-                type_abonnement,
                 COUNT(*) as nombre_abonnements,
                 COALESCE(SUM(prix_total), 0) as total_depense,
-                MAX(date_fin) as dernier_abonnement,
-                MIN(date_debut) as premier_abonnement
+                MAX(date_fin) as dernier_abonnement
             FROM clients
-            GROUP BY nom, prenom, email, telephone, type_abonnement
+            GROUP BY nom, prenom, email
             ORDER BY total_depense DESC
             LIMIT 20
         `);
@@ -322,7 +315,7 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast30, debutMois]);
 
         // ============================================
-        // 14. STATISTIQUES PAR STATUT (détaillées)
+        // 14. STATISTIQUES PAR STATUT
         // ============================================
         const statsParStatut = await db.query(`
             SELECT 
@@ -342,11 +335,10 @@ router.get('/analyse-complete', async (req, res) => {
         const tranchesPrix = await db.query(`
             SELECT 
                 CASE 
-                    WHEN prix_total < 100 THEN 'Moins de 100 DH'
-                    WHEN prix_total < 300 THEN '100 - 300 DH'
-                    WHEN prix_total < 500 THEN '301 - 500 DH'
-                    WHEN prix_total < 1000 THEN '501 - 1000 DH'
-                    WHEN prix_total >= 1000 THEN 'Plus de 1000 DH'
+                    WHEN prix_total < 100 THEN 'Moins de 100'
+                    WHEN prix_total < 300 THEN '100 - 300'
+                    WHEN prix_total < 500 THEN '301 - 500'
+                    WHEN prix_total >= 500 THEN 'Plus de 500'
                     ELSE 'Non renseigné'
                 END as tranche,
                 COUNT(*) as nombre_clients,
@@ -354,11 +346,10 @@ router.get('/analyse-complete', async (req, res) => {
             FROM clients
             GROUP BY 
                 CASE 
-                    WHEN prix_total < 100 THEN 'Moins de 100 DH'
-                    WHEN prix_total < 300 THEN '100 - 300 DH'
-                    WHEN prix_total < 500 THEN '301 - 500 DH'
-                    WHEN prix_total < 1000 THEN '501 - 1000 DH'
-                    WHEN prix_total >= 1000 THEN 'Plus de 1000 DH'
+                    WHEN prix_total < 100 THEN 'Moins de 100'
+                    WHEN prix_total < 300 THEN '100 - 300'
+                    WHEN prix_total < 500 THEN '301 - 500'
+                    WHEN prix_total >= 500 THEN 'Plus de 500'
                     ELSE 'Non renseigné'
                 END
             ORDER BY revenu_tranche DESC
@@ -404,7 +395,6 @@ router.get('/analyse-complete', async (req, res) => {
                     WHEN telephone LIKE '+41%' THEN 'Suisse'
                     WHEN telephone LIKE '+1%' THEN 'Amérique du Nord'
                     WHEN telephone LIKE '+44%' THEN 'Royaume-Uni'
-                    WHEN telephone LIKE '+212%' THEN 'Maroc'
                     ELSE 'Autre'
                 END as region,
                 COUNT(*) as nombre_clients,
@@ -418,7 +408,6 @@ router.get('/analyse-complete', async (req, res) => {
                     WHEN telephone LIKE '+41%' THEN 'Suisse'
                     WHEN telephone LIKE '+1%' THEN 'Amérique du Nord'
                     WHEN telephone LIKE '+44%' THEN 'Royaume-Uni'
-                    WHEN telephone LIKE '+212%' THEN 'Maroc'
                     ELSE 'Autre'
                 END
             ORDER BY nombre_clients DESC
@@ -462,29 +451,18 @@ router.get('/analyse-complete', async (req, res) => {
         const caTotal = parseFloat(statsGenerales.rows[0]?.chiffre_affaires_total || 0);
         const caMois = parseFloat(performanceMois.rows[0]?.chiffre_affaires || 0);
         
-        // Taux de désabonnement
         const desabonnesMois = parseInt(churnData.rows[0]?.desabonnes_mois || 0);
         const actifsDebutMois = parseInt(churnData.rows[0]?.actifs_debut_mois || 1);
         const tauxDesabonnement = (desabonnesMois / actifsDebutMois * 100).toFixed(2);
         
-        // Évolution par rapport au mois précédent
         const caMoisPrec = parseFloat(comparaisonMoisPrec.rows[0]?.chiffre_affaires || 0);
         const evolutionCA = caMoisPrec > 0 ? ((caMois - caMoisPrec) / caMoisPrec * 100).toFixed(1) : 0;
 
-        // Formater le client le plus performant
         const topClient = clientPlusPerformant.rows[0] || null;
         const topClientFormatted = topClient ? {
             ...topClient,
             total_depense_formate: formatPrixMAD(topClient.total_depense),
-            depense_moyenne_formate: formatPrixMAD(topClient.depense_moyenne),
-            details: {
-                id: topClient.idclient,
-                nom_complet: `${topClient.prenom} ${topClient.nom}`,
-                abonnement_prefere: topClient.type_abonnement,
-                performance: `Client premium avec ${topClient.nombre_abonnements} abonnements`,
-                statut: topClient.statut_actuel,
-                duree_relation_jours: topClient.duree_totale_jours
-            }
+            depense_moyenne_formate: formatPrixMAD(topClient.depense_moyenne)
         } : null;
 
         // ============================================
@@ -501,7 +479,6 @@ router.get('/analyse-complete', async (req, res) => {
                 minute: '2-digit'
             }),
             
-            // 1. RÉSUMÉ EXÉCUTIF
             resume_executif: {
                 metriques_principales: {
                     total_clients: total,
@@ -513,7 +490,6 @@ router.get('/analyse-complete', async (req, res) => {
                 },
                 chiffre_affaires: {
                     total: formatPrixMAD(caTotal),
-                    total_brut: caTotal.toFixed(2),
                     mois_en_cours: formatPrixMAD(caMois),
                     evolution_mensuelle: evolutionCA + '%',
                     panier_moyen: formatPrixMAD(parseFloat(statsGenerales.rows[0]?.panier_moyen || 0))
@@ -527,7 +503,6 @@ router.get('/analyse-complete', async (req, res) => {
                 client_plus_performant: topClientFormatted
             },
 
-            // 2. ÉVOLUTION DU CHIFFRE D'AFFAIRES MENSUEL COMPARATIF
             evolution_ca_mensuelle: {
                 donnees: evolutionCAMensuelle.rows.map(row => ({
                     ...row,
@@ -536,30 +511,14 @@ router.get('/analyse-complete', async (req, res) => {
                     ca_annee_precedente: row.ca_annee_precedente ? formatPrixMAD(row.ca_annee_precedente) : null,
                     evolution_mensuelle_pourcentage: parseFloat(row.evolution_mensuelle_pourcentage || 0).toFixed(2),
                     evolution_annuelle_pourcentage: parseFloat(row.evolution_annuelle_pourcentage || 0).toFixed(2)
-                })),
-                resume: {
-                    meilleure_progression_mensuelle: evolutionCAMensuelle.rows.reduce((max, row) => 
-                        parseFloat(row.evolution_mensuelle_pourcentage) > parseFloat(max?.evolution_mensuelle_pourcentage || 0) ? row : max, {}),
-                    pire_performance_mensuelle: evolutionCAMensuelle.rows.reduce((min, row) => 
-                        parseFloat(row.evolution_mensuelle_pourcentage) < parseFloat(min?.evolution_mensuelle_pourcentage || 0) ? row : min, {}),
-                    moyenne_ca_12mois: formatPrixMAD(
-                        evolutionCAMensuelle.rows.slice(0, 12).reduce((acc, row) => acc + parseFloat(row.ca_mois || 0), 0) / 
-                        Math.min(evolutionCAMensuelle.rows.length, 12)
-                    )
-                }
+                }))
             },
 
-            // 3. ÉTUDE CHURN APPROFONDIE
             etude_churn: {
                 donnees_mensuelles: etudeChurn.rows.map(row => ({
                     ...row,
                     revenu_perdu: formatPrixMAD(row.revenu_perdu),
-                    taux_desabonnement_premiers_30j: ((row.desabonnes_premiers_30j / row.nb_desabonnements) * 100).toFixed(2) + '%',
-                    repartition_par_type: {
-                        premium: ((row.premium_perdus / row.nb_desabonnements) * 100).toFixed(2) + '%',
-                        standard: ((row.standard_perdus / row.nb_desabonnements) * 100).toFixed(2) + '%',
-                        essentiel: ((row.essentiel_perdus / row.nb_desabonnements) * 100).toFixed(2) + '%'
-                    }
+                    taux_premiers_30j: ((row.desabonnes_premiers_30j / row.nb_desabonnements) * 100).toFixed(2) + '%'
                 })),
                 analyse_globale: {
                     total_desabonnes_6mois: etudeChurn.rows.reduce((acc, row) => acc + parseInt(row.nb_desabonnements || 0), 0),
@@ -567,32 +526,15 @@ router.get('/analyse-complete', async (req, res) => {
                     duree_moyenne_abonnement_globale: (
                         etudeChurn.rows.reduce((acc, row) => acc + parseFloat(row.duree_moyenne_abonnement || 0), 0) / 
                         Math.max(etudeChurn.rows.length, 1)
-                    ).toFixed(0) + ' jours',
-                    taux_desabonnement_moyen: (
-                        etudeChurn.rows.reduce((acc, row) => acc + (row.nb_desabonnements / Math.max(row.nouveaux_actifs_mois, 1)), 0) / 
-                        Math.max(etudeChurn.rows.length, 1) * 100
-                    ).toFixed(2) + '%'
-                },
-                alertes: {
-                    pics_desabonnement: etudeChurn.rows
-                        .filter(row => row.nb_desabonnements > (etudeChurn.rows.reduce((acc, r) => acc + r.nb_desabonnements, 0) / etudeChurn.rows.length) * 1.5)
-                        .map(row => row.mois),
-                    types_abonnement_plus_touches: etudeChurn.rows.length > 0 ? 
-                        Object.entries({
-                            premium: etudeChurn.rows.reduce((acc, row) => acc + row.premium_perdus, 0),
-                            standard: etudeChurn.rows.reduce((acc, row) => acc + row.standard_perdus, 0),
-                            essentiel: etudeChurn.rows.reduce((acc, row) => acc + row.essentiel_perdus, 0)
-                        }).sort((a, b) => b[1] - a[1])[0][0] : 'N/A'
+                    ).toFixed(0) + ' jours'
                 }
             },
 
-            // 4. ANALYSE DES TENDANCES
             tendances: {
                 evolution_mensuelle: evolutionMensuelle.rows.map(row => ({
                     ...row,
                     revenus_mois: formatPrixMAD(row.revenus_mois)
                 })),
-                evolution_ca_mensuelle: evolutionCAMensuelle.rows,
                 evolution_statuts: evolutionStatuts.rows,
                 tendances_hebdomadaires: tendancesHebdo.rows.map(row => ({
                     ...row,
@@ -601,7 +543,6 @@ router.get('/analyse-complete', async (req, res) => {
                 heures_populaires: heuresReservation.rows
             },
 
-            // 5. ANALYSE COMMERCIALE
             commercial: {
                 performance_mois: {
                     ventes: parseInt(performanceMois.rows[0]?.nombre_ventes || 0),
@@ -617,15 +558,12 @@ router.get('/analyse-complete', async (req, res) => {
                 },
                 top_clients: topClients.rows.slice(0, 10).map(client => ({
                     ...client,
-                    total_depense: formatPrixMAD(client.total_depense),
-                    total_depense_brut: client.total_depense
+                    total_depense: formatPrixMAD(client.total_depense)
                 })),
                 par_type_abonnement: statsParAbonnement.rows.map(row => ({
                     ...row,
                     revenu_total: formatPrixMAD(row.revenu_total),
-                    prix_moyen: formatPrixMAD(row.prix_moyen),
-                    prix_minimum: formatPrixMAD(row.prix_minimum),
-                    prix_maximum: formatPrixMAD(row.prix_maximum)
+                    prix_moyen: formatPrixMAD(row.prix_moyen)
                 })),
                 par_mode_paiement: statsParPaiement.rows.map(row => ({
                     ...row,
@@ -634,7 +572,6 @@ router.get('/analyse-complete', async (req, res) => {
                 }))
             },
 
-            // 6. ANALYSE CLIENTS
             clients: {
                 repartition_par_statut: statsParStatut.rows.map(row => ({
                     ...row,
@@ -648,11 +585,9 @@ router.get('/analyse-complete', async (req, res) => {
                 repartition_geographique: repartitionGeo.rows.map(row => ({
                     ...row,
                     revenu_total: formatPrixMAD(row.revenu_total)
-                })),
-                clients_actifs_sans_reservation: statsParStatut.rows.find(s => s.statut === 'actif')?.avec_reservation || 0
+                }))
             },
 
-            // 7. ACTIONS REQUISES
             actions: {
                 clients_a_contacter: expirationsProchaines.rows.map(client => ({
                     ...client,
@@ -668,7 +603,6 @@ router.get('/analyse-complete', async (req, res) => {
                 }
             },
 
-            // 8. ANALYSE DE SATISFACTION
             satisfaction: {
                 indicateurs: {
                     taux_activite: total > 0 ? ((satisfactionData.rows[0]?.clients_actifs || 0) / total * 100).toFixed(1) + '%' : '0%',
@@ -678,7 +612,6 @@ router.get('/analyse-complete', async (req, res) => {
                 }
             },
 
-            // 9. PRÉVISIONS
             previsions: {
                 renouvellements_3_mois: renouvellementsPrevus.rows.map(row => ({
                     ...row,
@@ -689,13 +622,12 @@ router.get('/analyse-complete', async (req, res) => {
                 )
             },
 
-            // 10. RECOMMANDATIONS STRATÉGIQUES
             recommandations: [
                 {
                     priorite: expirationsProchaines.rows.filter(c => c.priorite === 'Urgent').length > 0 ? 'Haute' : 'Normale',
                     domaine: 'Fidélisation',
                     action: expirationsProchaines.rows.filter(c => c.priorite === 'Urgent').length > 0 
-                        ? `Contacter d'urgence les ${expirationsProchaines.rows.filter(c => c.priorite === 'Urgent').length} clients dont l'abonnement expire dans moins de 7 jours`
+                        ? `Contacter d'urgence les ${expirationsProchaines.rows.filter(c => c.priorite === 'Urgent').length} clients`
                         : 'Aucune expiration urgente',
                     impact: 'Maintien du taux de rétention'
                 },
@@ -703,42 +635,15 @@ router.get('/analyse-complete', async (req, res) => {
                     priorite: parseFloat(tauxDesabonnement) > 5 ? 'Haute' : 'Moyenne',
                     domaine: 'Rétention',
                     action: parseFloat(tauxDesabonnement) > 5
-                        ? 'Mettre en place un programme de fidélisation pour réduire le taux de désabonnement'
+                        ? 'Mettre en place un programme de fidélisation'
                         : 'Taux de désabonnement sous contrôle',
-                    impact: `Réduction potentielle de ${parseFloat(tauxDesabonnement).toFixed(1)}% à 3%`
-                },
-                {
-                    priorite: evolutionCA < 0 ? 'Moyenne' : 'Basse',
-                    domaine: 'Croissance',
-                    action: evolutionCA < 0
-                        ? 'Relancer les campagnes marketing pour inverser la tendance'
-                        : 'Maintenir la stratégie commerciale actuelle',
-                    impact: 'Augmentation du chiffre d\'affaires'
-                },
-                {
-                    priorite: topClients.rows.length > 0 ? 'Basse' : 'Moyenne',
-                    domaine: 'Fidélisation premium',
-                    action: topClient ? 
-                        `Proposer des offres exclusives à ${topClient.prenom} ${topClient.nom} (client le plus performant)` :
-                        'Développer le programme de fidélisation premium',
-                    impact: 'Renforcement de la relation client'
-                },
-                {
-                    priorite: etudeChurn.rows.some(row => row.desabonnes_premiers_30j > row.nb_desabonnements * 0.3) ? 'Haute' : 'Moyenne',
-                    domaine: 'Onboarding',
-                    action: 'Améliorer le processus d\'accueil pour réduire le churn des 30 premiers jours',
-                    impact: 'Fidélisation précoce des nouveaux clients'
+                    impact: `Réduction du taux de désabonnement`
                 }
             ],
 
-            // 11. MÉTRIQUES CLÉS EN DIRHAM
             metriques_financieres: {
                 total_revenus: formatPrixMAD(caTotal),
-                revenu_mensuel_moyen: formatPrixMAD(evolutionCAMensuelle.rows.slice(0, 12).reduce((acc, row) => acc + parseFloat(row.ca_mois || 0), 0) / 12),
-                panier_moyen_global: formatPrixMAD(parseFloat(statsGenerales.rows[0]?.panier_moyen || 0)),
-                prevision_3mois: formatPrixMAD(
-                    renouvellementsPrevus.rows.slice(0, 3).reduce((acc, r) => acc + parseFloat(r.montant_total), 0)
-                )
+                panier_moyen_global: formatPrixMAD(parseFloat(statsGenerales.rows[0]?.panier_moyen || 0))
             }
         });
 
@@ -784,8 +689,7 @@ router.get('/top-client', async (req, res) => {
                 CASE 
                     WHEN MAX(date_fin) >= CURRENT_DATE THEN 'Actif'
                     ELSE 'Inactif'
-                END as statut_actuel,
-                (MAX(date_fin) - MIN(date_debut)) as duree_totale_jours
+                END as statut_actuel
             FROM clients
             GROUP BY idclient, nom, prenom, email, telephone, type_abonnement
             ORDER BY total_depense DESC
@@ -799,13 +703,7 @@ router.get('/top-client', async (req, res) => {
                 client: {
                     ...client,
                     total_depense_formate: formatPrixMAD(client.total_depense),
-                    depense_moyenne_formate: formatPrixMAD(client.depense_moyenne),
-                    details: {
-                        nom_complet: `${client.prenom} ${client.nom}`,
-                        abonnement: client.type_abonnement,
-                        performance: `Client avec ${client.nombre_abonnements} abonnements`,
-                        statut: client.statut_actuel
-                    }
+                    depense_moyenne_formate: formatPrixMAD(client.depense_moyenne)
                 }
             });
         } else {
@@ -826,7 +724,7 @@ router.get('/top-client', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT POUR L'ÉTUDE CHURN DÉTAILLÉE (CORRIGÉ)
+// ENDPOINT POUR L'ÉTUDE CHURN DÉTAILLÉE
 // ============================================
 router.get('/etude-churn', async (req, res) => {
     try {
