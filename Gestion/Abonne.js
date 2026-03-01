@@ -60,14 +60,29 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 2. ÉVOLUTION DU CHIFFRE D'AFFAIRES MENSUEL COMPARATIF
+        // 2. ÉVOLUTION MENSUELLE (pour courbes) - CORRIGÉ
+        // ============================================
+        const evolutionMensuelle = await db.query(`
+            SELECT 
+                TO_CHAR(date_debut, 'YYYY-MM') as mois,
+                COUNT(*) as nouveaux_clients,
+                COALESCE(SUM(prix_total), 0) as revenus_mois
+            FROM clients
+            WHERE date_debut >= $1
+            GROUP BY TO_CHAR(date_debut, 'YYYY-MM')
+            ORDER BY mois DESC
+            LIMIT 12
+        `, [datePast365]);
+
+        // ============================================
+        // 3. ÉVOLUTION DU CHIFFRE D'AFFAIRES MENSUEL COMPARATIF - CORRIGÉ
         // ============================================
         const evolutionCAMensuelle = await db.query(`
             WITH ca_mensuel AS (
                 SELECT 
                     TO_CHAR(date_debut, 'YYYY-MM') as mois,
-                    EXTRACT(YEAR FROM date_debut) as annee,
-                    EXTRACT(MONTH FROM date_debut) as mois_num,
+                    EXTRACT(YEAR FROM date_debt::timestamp) as annee,
+                    EXTRACT(MONTH FROM date_debut::timestamp) as mois_num,
                     COALESCE(SUM(prix_total), 0) as ca_mois,
                     COUNT(*) as nombre_ventes,
                     COUNT(DISTINCT email) as nouveaux_clients,
@@ -75,7 +90,7 @@ router.get('/analyse-complete', async (req, res) => {
                     LAG(COALESCE(SUM(prix_total), 0), 12) OVER (ORDER BY MIN(date_debut)) as ca_annee_precedente
                 FROM clients
                 WHERE date_debut >= $1
-                GROUP BY TO_CHAR(date_debut, 'YYYY-MM'), EXTRACT(YEAR FROM date_debut), EXTRACT(MONTH FROM date_debut)
+                GROUP BY TO_CHAR(date_debut, 'YYYY-MM'), EXTRACT(YEAR FROM date_debut::timestamp), EXTRACT(MONTH FROM date_debut::timestamp)
             )
             SELECT 
                 mois,
@@ -100,7 +115,69 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast365]);
 
         // ============================================
-        // 3. ÉTUDE CHURN APPROFONDIE
+        // 4. STATISTIQUES PAR TYPE D'ABONNEMENT
+        // ============================================
+        const statsParAbonnement = await db.query(`
+            SELECT 
+                type_abonnement,
+                COUNT(*) as nombre,
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as prix_moyen,
+                MIN(prix_total) as prix_minimum,
+                MAX(prix_total) as prix_maximum,
+                COUNT(CASE WHEN statut = 'actif' THEN 1 END) as actifs,
+                COUNT(CASE WHEN statut = 'inactif' THEN 1 END) as inactifs,
+                COUNT(CASE WHEN statut = 'en attente' THEN 1 END) as en_attente,
+                COUNT(CASE WHEN statut = 'expire' THEN 1 END) as expires
+            FROM clients
+            WHERE type_abonnement IS NOT NULL
+            GROUP BY type_abonnement
+            ORDER BY nombre DESC
+        `);
+
+        // ============================================
+        // 5. STATISTIQUES PAR MODE DE PAIEMENT
+        // ============================================
+        const statsParPaiement = await db.query(`
+            SELECT 
+                mode_paiement,
+                COUNT(*) as nombre_transactions,
+                COALESCE(SUM(prix_total), 0) as revenu_total,
+                COALESCE(AVG(prix_total), 0) as montant_moyen
+            FROM clients
+            WHERE mode_paiement IS NOT NULL
+            GROUP BY mode_paiement
+            ORDER BY revenu_total DESC
+        `);
+
+        // ============================================
+        // 6. ANALYSE DES HEURES DE RÉSERVATION
+        // ============================================
+        const heuresReservation = await db.query(`
+            SELECT 
+                heure_reservation,
+                COUNT(*) as nombre_reservations,
+                COUNT(DISTINCT email) as clients_uniques
+            FROM clients
+            WHERE heure_reservation IS NOT NULL
+            GROUP BY heure_reservation
+            ORDER BY nombre_reservations DESC
+            LIMIT 10
+        `);
+
+        // ============================================
+        // 7. TAUX DE DÉSABONNEMENT (CHURN) - Synthèse
+        // ============================================
+        const churnData = await db.query(`
+            SELECT 
+                COUNT(CASE WHEN statut IN ('inactif', 'expire') AND date_fin > $1 THEN 1 END) as desabonnes_mois,
+                COUNT(CASE WHEN statut = 'actif' AND date_debut > $1 THEN 1 END) as nouveaux_actifs_mois,
+                COUNT(CASE WHEN statut = 'actif' AND date_debut <= $1 AND (date_fin >= $1 OR date_fin IS NULL) THEN 1 END) as actifs_debut_mois
+            FROM clients
+        `, [datePast30]);
+
+        // ============================================
+        // 8. ÉTUDE CHURN APPROFONDIE - CORRIGÉE
         // ============================================
         const etudeChurn = await db.query(`
             WITH churn_analysis AS (
@@ -108,8 +185,8 @@ router.get('/analyse-complete', async (req, res) => {
                     DATE_TRUNC('month', date_fin) as mois_desabonnement,
                     COUNT(*) as nb_desabonnements,
                     COALESCE(SUM(prix_total), 0) as revenu_perdu,
-                    AVG(EXTRACT(DAY FROM (date_fin - date_debut))) as duree_moyenne_abonnement,
-                    COUNT(CASE WHEN EXTRACT(DAY FROM (date_fin - date_debut)) <= 30 THEN 1 END) as desabonnes_premiers_30j,
+                    AVG(EXTRACT(EPOCH FROM (date_fin - date_debut)) / 86400) as duree_moyenne_abonnement,
+                    COUNT(CASE WHEN (date_fin - date_debut) <= 30 THEN 1 END) as desabonnes_premiers_30j,
                     COUNT(CASE WHEN type_abonnement = 'premium' THEN 1 END) as premium_perdus,
                     COUNT(CASE WHEN type_abonnement = 'standard' THEN 1 END) as standard_perdus,
                     COUNT(CASE WHEN type_abonnement = 'essentiel' THEN 1 END) as essentiel_perdus
@@ -131,7 +208,7 @@ router.get('/analyse-complete', async (req, res) => {
                 TO_CHAR(ca.mois_desabonnement, 'YYYY-MM') as mois,
                 ca.nb_desabonnements,
                 ca.revenu_perdu,
-                ca.duree_moyenne_abonnement,
+                ROUND(ca.duree_moyenne_abonnement::numeric, 1) as duree_moyenne_abonnement,
                 ca.desabonnes_premiers_30j,
                 ca.premium_perdus,
                 ca.standard_perdus,
@@ -146,96 +223,6 @@ router.get('/analyse-complete', async (req, res) => {
             LEFT JOIN actifs_par_mois apm ON ca.mois_desabonnement = apm.mois_debut
             ORDER BY ca.mois_desabonnement DESC
         `, [datePast180]);
-
-        // ============================================
-        // 4. CLIENT LE PLUS PERFORMANT
-        // ============================================
-        const clientPlusPerformant = await db.query(`
-            SELECT 
-                idclient,
-                nom,
-                prenom,
-                email,
-                telephone,
-                type_abonnement,
-                COUNT(*) as nombre_abonnements,
-                COALESCE(SUM(prix_total), 0) as total_depense,
-                COALESCE(AVG(prix_total), 0) as depense_moyenne,
-                MIN(date_debut) as premier_abonnement,
-                MAX(date_fin) as dernier_abonnement,
-                CASE 
-                    WHEN MAX(date_fin) >= CURRENT_DATE THEN 'Actif'
-                    ELSE 'Inactif'
-                END as statut_actuel,
-                EXTRACT(DAY FROM (MAX(date_fin) - MIN(date_debut))) as duree_totale_jours,
-                COUNT(CASE WHEN statut = 'actif' THEN 1 END) as abonnements_actifs
-            FROM clients
-            GROUP BY idclient, nom, prenom, email, telephone, type_abonnement
-            ORDER BY total_depense DESC
-            LIMIT 1
-        `);
-
-        // ============================================
-        // 5. STATISTIQUES PAR TYPE D'ABONNEMENT
-        // ============================================
-        const statsParAbonnement = await db.query(`
-            SELECT 
-                type_abonnement,
-                COUNT(*) as nombre,
-                COALESCE(SUM(prix_total), 0) as revenu_total,
-                COALESCE(AVG(prix_total), 0) as prix_moyen,
-                MIN(prix_total) as prix_minimum,
-                MAX(prix_total) as prix_maximum,
-                COUNT(CASE WHEN statut = 'actif' THEN 1 END) as actifs,
-                COUNT(CASE WHEN statut = 'inactif' THEN 1 END) as inactifs,
-                COUNT(CASE WHEN statut = 'en attente' THEN 1 END) as en_attente,
-                COUNT(CASE WHEN statut = 'expire' THEN 1 END) as expires
-            FROM clients
-            WHERE type_abonnement IS NOT NULL
-            GROUP BY type_abonnement
-            ORDER BY nombre DESC
-        `);
-
-        // ============================================
-        // 6. STATISTIQUES PAR MODE DE PAIEMENT
-        // ============================================
-        const statsParPaiement = await db.query(`
-            SELECT 
-                mode_paiement,
-                COUNT(*) as nombre_transactions,
-                COALESCE(SUM(prix_total), 0) as revenu_total,
-                COALESCE(AVG(prix_total), 0) as montant_moyen
-            FROM clients
-            WHERE mode_paiement IS NOT NULL
-            GROUP BY mode_paiement
-            ORDER BY revenu_total DESC
-        `);
-
-        // ============================================
-        // 7. ANALYSE DES HEURES DE RÉSERVATION
-        // ============================================
-        const heuresReservation = await db.query(`
-            SELECT 
-                heure_reservation,
-                COUNT(*) as nombre_reservations,
-                COUNT(DISTINCT email) as clients_uniques
-            FROM clients
-            WHERE heure_reservation IS NOT NULL
-            GROUP BY heure_reservation
-            ORDER BY nombre_reservations DESC
-            LIMIT 10
-        `);
-
-        // ============================================
-        // 8. TAUX DE DÉSABONNEMENT (CHURN) - Synthèse
-        // ============================================
-        const churnData = await db.query(`
-            SELECT 
-                COUNT(CASE WHEN statut IN ('inactif', 'expire') AND date_fin > $1 THEN 1 END) as desabonnes_mois,
-                COUNT(CASE WHEN statut = 'actif' AND date_debut > $1 THEN 1 END) as nouveaux_actifs_mois,
-                COUNT(CASE WHEN statut = 'actif' AND date_debut <= $1 AND (date_fin >= $1 OR date_fin IS NULL) THEN 1 END) as actifs_debut_mois
-            FROM clients
-        `, [datePast30]);
 
         // ============================================
         // 9. CLIENTS À CONTACTER (expirations)
@@ -263,7 +250,35 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 10. TOP CLIENTS (performance commerciale)
+        // 10. CLIENT LE PLUS PERFORMANT - CORRIGÉ
+        // ============================================
+        const clientPlusPerformant = await db.query(`
+            SELECT 
+                idclient,
+                nom,
+                prenom,
+                email,
+                telephone,
+                type_abonnement,
+                COUNT(*) as nombre_abonnements,
+                COALESCE(SUM(prix_total), 0) as total_depense,
+                COALESCE(AVG(prix_total), 0) as depense_moyenne,
+                MIN(date_debut) as premier_abonnement,
+                MAX(date_fin) as dernier_abonnement,
+                CASE 
+                    WHEN MAX(date_fin) >= CURRENT_DATE THEN 'Actif'
+                    ELSE 'Inactif'
+                END as statut_actuel,
+                (MAX(date_fin) - MIN(date_debut)) as duree_totale_jours,
+                COUNT(CASE WHEN statut = 'actif' THEN 1 END) as abonnements_actifs
+            FROM clients
+            GROUP BY idclient, nom, prenom, email, telephone, type_abonnement
+            ORDER BY total_depense DESC
+            LIMIT 1
+        `);
+
+        // ============================================
+        // 11. TOP CLIENTS (performance commerciale)
         // ============================================
         const topClients = await db.query(`
             SELECT 
@@ -283,7 +298,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 11. PERFORMANCE COMMERCIALE DU MOIS
+        // 12. PERFORMANCE COMMERCIALE DU MOIS
         // ============================================
         const performanceMois = await db.query(`
             SELECT 
@@ -296,7 +311,7 @@ router.get('/analyse-complete', async (req, res) => {
         `, [debutMois]);
 
         // ============================================
-        // 12. COMPARAISON AVEC MOIS PRÉCÉDENT
+        // 13. COMPARAISON AVEC MOIS PRÉCÉDENT
         // ============================================
         const comparaisonMoisPrec = await db.query(`
             SELECT 
@@ -307,7 +322,7 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast30, debutMois]);
 
         // ============================================
-        // 13. STATISTIQUES PAR STATUT (détaillées)
+        // 14. STATISTIQUES PAR STATUT (détaillées)
         // ============================================
         const statsParStatut = await db.query(`
             SELECT 
@@ -322,7 +337,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 14. RÉPARTITION PAR TRANCHE DE PRIX
+        // 15. RÉPARTITION PAR TRANCHE DE PRIX
         // ============================================
         const tranchesPrix = await db.query(`
             SELECT 
@@ -350,7 +365,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 15. ÉVOLUTION DES STATUTS
+        // 16. ÉVOLUTION DES STATUTS
         // ============================================
         const evolutionStatuts = await db.query(`
             SELECT 
@@ -367,7 +382,7 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast180]);
 
         // ============================================
-        // 16. ANALYSE DE SATISFACTION
+        // 17. ANALYSE DE SATISFACTION
         // ============================================
         const satisfactionData = await db.query(`
             SELECT 
@@ -379,7 +394,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 17. ANALYSE DÉMOGRAPHIQUE
+        // 18. ANALYSE DÉMOGRAPHIQUE
         // ============================================
         const repartitionGeo = await db.query(`
             SELECT 
@@ -410,7 +425,7 @@ router.get('/analyse-complete', async (req, res) => {
         `);
 
         // ============================================
-        // 18. ANALYSE DES TENDANCES HEBDOMADAIRES
+        // 19. ANALYSE DES TENDANCES HEBDOMADAIRES
         // ============================================
         const tendancesHebdo = await db.query(`
             SELECT 
@@ -425,7 +440,7 @@ router.get('/analyse-complete', async (req, res) => {
         `, [datePast90]);
 
         // ============================================
-        // 19. PRÉVISION DES RENOUVELLEMENTS
+        // 20. PRÉVISION DES RENOUVELLEMENTS
         // ============================================
         const renouvellementsPrevus = await db.query(`
             SELECT 
@@ -749,7 +764,7 @@ router.get('/test', (req, res) => {
 });
 
 // ============================================
-// ENDPOINT POUR LE CLIENT LE PLUS PERFORMANT SEULEMENT
+// ENDPOINT POUR LE CLIENT LE PLUS PERFORMANT
 // ============================================
 router.get('/top-client', async (req, res) => {
     try {
@@ -769,7 +784,8 @@ router.get('/top-client', async (req, res) => {
                 CASE 
                     WHEN MAX(date_fin) >= CURRENT_DATE THEN 'Actif'
                     ELSE 'Inactif'
-                END as statut_actuel
+                END as statut_actuel,
+                (MAX(date_fin) - MIN(date_debut)) as duree_totale_jours
             FROM clients
             GROUP BY idclient, nom, prenom, email, telephone, type_abonnement
             ORDER BY total_depense DESC
@@ -810,7 +826,7 @@ router.get('/top-client', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT POUR L'ÉTUDE CHURN DÉTAILLÉE
+// ENDPOINT POUR L'ÉTUDE CHURN DÉTAILLÉE (CORRIGÉ)
 // ============================================
 router.get('/etude-churn', async (req, res) => {
     try {
@@ -822,8 +838,8 @@ router.get('/etude-churn', async (req, res) => {
                     DATE_TRUNC('month', date_fin) as mois_desabonnement,
                     COUNT(*) as nb_desabonnements,
                     COALESCE(SUM(prix_total), 0) as revenu_perdu,
-                    AVG(EXTRACT(DAY FROM (date_fin - date_debut))) as duree_moyenne_abonnement,
-                    COUNT(CASE WHEN EXTRACT(DAY FROM (date_fin - date_debut)) <= 30 THEN 1 END) as desabonnes_premiers_30j,
+                    AVG(EXTRACT(EPOCH FROM (date_fin - date_debut)) / 86400) as duree_moyenne_abonnement,
+                    COUNT(CASE WHEN (date_fin - date_debut) <= 30 THEN 1 END) as desabonnes_premiers_30j,
                     COUNT(CASE WHEN type_abonnement = 'premium' THEN 1 END) as premium_perdus,
                     COUNT(CASE WHEN type_abonnement = 'standard' THEN 1 END) as standard_perdus,
                     COUNT(CASE WHEN type_abonnement = 'essentiel' THEN 1 END) as essentiel_perdus
@@ -836,7 +852,7 @@ router.get('/etude-churn', async (req, res) => {
                 TO_CHAR(mois_desabonnement, 'YYYY-MM') as mois,
                 nb_desabonnements,
                 revenu_perdu,
-                duree_moyenne_abonnement,
+                ROUND(duree_moyenne_abonnement::numeric, 1) as duree_moyenne_abonnement,
                 desabonnes_premiers_30j,
                 premium_perdus,
                 standard_perdus,
