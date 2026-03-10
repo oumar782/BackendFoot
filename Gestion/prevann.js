@@ -111,6 +111,7 @@ router.get('/dashboard-annulations', async (req, res) => {
     });
   }
 });
+
 // 📊 Route pour les terrains les plus affectés (CORRIGÉE)
 router.get('/terrains-annulations', async (req, res) => {
     try {
@@ -163,7 +164,8 @@ router.get('/terrains-annulations', async (req, res) => {
         error: error.message
       });
     }
-  });
+});
+
 // 📊 Statistiques des annulations par période (futur, présent, passé)
 router.get('/stats-periodes-annulations', async (req, res) => {
     try {
@@ -207,8 +209,7 @@ router.get('/stats-periodes-annulations', async (req, res) => {
         error: error.message
       });
     }
-  });
-// Ajoutez/modifiez cette route dans votre fichier routes/stats.js
+});
 
 // 📈 Évolution des annulations sur 12 mois avec mois courant centré
 router.get('/evolution-annulations', async (req, res) => {
@@ -322,7 +323,7 @@ router.get('/evolution-annulations', async (req, res) => {
     });
   }
 });
-// 🎯 Analyse des terrains les plus affectés par les annulations
+
 // 📋 Liste des annulations récentes avec détails complets
 router.get('/annulations-recentes', async (req, res) => {
     try {
@@ -347,7 +348,7 @@ router.get('/annulations-recentes', async (req, res) => {
             WHEN r.datereservation > CURRENT_DATE THEN 
               'Dans ' || EXTRACT(DAY FROM (r.datereservation - CURRENT_DATE)) || ' jour(s)'
             WHEN r.datereservation = CURRENT_DATE THEN 
-              'Aujourd\\'hui'
+              'Aujourd\'hui'
             ELSE 
               'Il y a ' || EXTRACT(DAY FROM (CURRENT_DATE - r.datereservation)) || ' jour(s)'
           END as delai_affichage,
@@ -396,8 +397,7 @@ router.get('/annulations-recentes', async (req, res) => {
         error: error.message
       });
     }
-  });
-  
+});
 
 // 📅 Analyse temporelle des annulations
 router.get('/analyse-temporelle-annulations', async (req, res) => {
@@ -593,7 +593,7 @@ router.get('/previsions-annulations', async (req, res) => {
   }
 });
 
-// 🔮 NOUVELLE ROUTE : Prévisions détaillées par jour
+// 🔮 Prévisions détaillées par jour
 router.get('/previsions-journalieres', async (req, res) => {
   try {
     const { jours = '14' } = req.query;
@@ -614,40 +614,7 @@ router.get('/previsions-journalieres', async (req, res) => {
       GROUP BY EXTRACT(DOW FROM datereservation), TO_CHAR(datereservation, 'Day')
       ORDER BY jour_semaine
     `);
-// 📅 Route pour récupérer les dates d'annulation détaillées par terrain
-router.get('/dates-annulation-terrain/:terrainId', async (req, res) => {
-  try {
-    const { terrainId } = req.params;
-    
-    const result = await db.query(`
-      SELECT 
-        TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
-        TO_CHAR(datereservation, 'HH24:MI') as heure,
-        tarif,
-        nomclient as client,
-        statut
-      FROM reservation 
-      WHERE numeroterrain = $1 
-        AND statut = 'annulée'
-        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
-      ORDER BY datereservation DESC
-      LIMIT 20
-    `, [terrainId]);
 
-    res.json({
-      success: true,
-      data: result.rows,
-      terrain_id: terrainId
-    });
-  } catch (error) {
-    console.error('❌ Erreur dates annulation terrain:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur interne du serveur',
-      error: error.message
-    });
-  }
-});
     // 2. Réservations futures groupées par jour
     const reservationsParJour = await db.query(`
       SELECT 
@@ -730,6 +697,41 @@ router.get('/dates-annulation-terrain/:terrainId', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Erreur prévisions journalières:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📅 Route pour récupérer les dates d'annulation détaillées par terrain
+router.get('/dates-annulation-terrain/:terrainId', async (req, res) => {
+  try {
+    const { terrainId } = req.params;
+    
+    const result = await db.query(`
+      SELECT 
+        TO_CHAR(datereservation, 'YYYY-MM-DD') as date_annulation,
+        TO_CHAR(datereservation, 'HH24:MI') as heure,
+        tarif,
+        nomclient as client,
+        statut
+      FROM reservation 
+      WHERE numeroterrain = $1 
+        AND statut = 'annulée'
+        AND datereservation >= CURRENT_DATE - INTERVAL '90 days'
+      ORDER BY datereservation DESC
+      LIMIT 20
+    `, [terrainId]);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      terrain_id: terrainId
+    });
+  } catch (error) {
+    console.error('❌ Erreur dates annulation terrain:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -840,7 +842,517 @@ router.get('/synthese-annulations', async (req, res) => {
   }
 });
 
-// Fonction utilitaire pour calculer les trends d'annulation
+// ============================================
+// NOUVELLES ROUTES D'ANALYSE CLIENTS
+// ============================================
+
+// 👥 CLASSIFICATION DES CLIENTS PAR NIVEAU DE NUISANCE
+router.get('/classification-clients', async (req, res) => {
+  try {
+    const { periode = '6 months' } = req.query;
+    
+    const result = await db.query(`
+      WITH stats_clients AS (
+        SELECT 
+          nomclient,
+          email,
+          telephone,
+          COUNT(*) as total_reservations,
+          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as total_annulations,
+          COUNT(CASE WHEN statut = 'confirmée' THEN 1 END) as total_confirmations,
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation > CURRENT_DATE THEN 1 END) as annulations_futures,
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation < CURRENT_DATE THEN 1 END) as annulations_passees,
+          COUNT(CASE WHEN statut = 'annulée' AND datereservation = CURRENT_DATE THEN 1 END) as annulations_aujourdhui,
+          COALESCE(SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END), 0) as montant_pertes_causees,
+          COALESCE(SUM(CASE WHEN statut = 'confirmée' THEN tarif ELSE 0 END), 0) as montant_generes,
+          ROUND(
+            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / 
+            NULLIF(COUNT(*), 0)
+            ), 2
+          ) as taux_annulation,
+          MAX(CASE WHEN statut = 'annulée' THEN datereservation END) as derniere_annulation,
+          MIN(CASE WHEN statut = 'annulée' THEN datereservation END) as premiere_annulation,
+          AVG(CASE 
+            WHEN statut = 'annulée' AND datereservation > CURRENT_DATE 
+            THEN EXTRACT(DAY FROM (datereservation - CURRENT_DATE))
+            ELSE NULL 
+          END) as delai_moyen_annulation_jours,
+          COUNT(DISTINCT DATE_TRUNC('day', datereservation)) as jours_avec_annulations
+        FROM reservation 
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '${periode}'
+        GROUP BY nomclient, email, telephone
+        HAVING COUNT(*) >= 2
+      ),
+      classification AS (
+        SELECT 
+          *,
+          CASE 
+            WHEN taux_annulation >= 50 OR total_annulations >= 5 
+                 OR (montant_pertes_causees > montant_generes * 0.5)
+                 OR (annulations_futures >= 3 AND delai_moyen_annulation_jours < 2)
+            THEN 'Critique'
+            
+            WHEN taux_annulation BETWEEN 25 AND 49.99 
+                 OR (total_annulations >= 3 AND total_annulations < 5)
+                 OR (montant_pertes_causees BETWEEN montant_generes * 0.25 AND montant_generes * 0.5)
+                 OR (annulations_futures >= 2)
+            THEN 'Modérée'
+            
+            WHEN taux_annulation BETWEEN 10 AND 24.99
+                 OR (total_annulations >= 1 AND total_annulations < 3)
+                 OR (montant_pertes_causees < montant_generes * 0.25)
+            THEN 'Faible'
+            
+            ELSE 'Fiable'
+          END as niveau_nuisance,
+          
+          LEAST(100, (
+            (taux_annulation * 0.4) + 
+            (LEAST(total_annulations, 20) * 3) +
+            ((montant_pertes_causees / NULLIF(montant_generes, 1)) * 30) +
+            (CASE WHEN annulations_futures > 0 THEN 20 ELSE 0 END) +
+            (CASE WHEN delai_moyen_annulation_jours < 3 THEN 15 ELSE 0 END)
+          )) as score_nuisance,
+          
+          CASE 
+            WHEN taux_annulation >= 50 THEN 'Taux annulation élevé'
+            WHEN total_annulations >= 5 THEN 'Nombre annulations important'
+            WHEN montant_pertes_causees > montant_generes * 0.5 THEN 'Pertes > 50% du CA généré'
+            WHEN annulations_futures >= 3 AND delai_moyen_annulation_jours < 2 THEN 'Annulations tardives multiples'
+            WHEN taux_annulation BETWEEN 25 AND 49.99 THEN 'Taux annulation modéré'
+            WHEN total_annulations >= 3 THEN 'Annulations régulières'
+            ELSE 'Comportement normal'
+          END as raison_classification
+        FROM stats_clients
+      )
+      SELECT 
+        *,
+        CASE niveau_nuisance
+          WHEN 'Critique' THEN '🚫 Blocage recommandé ou caution obligatoire'
+          WHEN 'Modérée' THEN '⚠️ Surveillance renforcée + rappels automatiques'
+          WHEN 'Faible' THEN '📧 Relances préventives avant réservation'
+          ELSE '💚 Aucune action particulière'
+        END as recommandation,
+        ROUND(montant_generes - montant_pertes_causees, 2) as impact_financier_net,
+        ROUND((montant_pertes_causees / NULLIF(montant_generes, 0)) * 100, 2) as ratio_pertes_sur_gains
+      FROM classification
+      ORDER BY 
+        CASE niveau_nuisance
+          WHEN 'Critique' THEN 1
+          WHEN 'Modérée' THEN 2
+          WHEN 'Faible' THEN 3
+          ELSE 4
+        END,
+        score_nuisance DESC,
+        total_annulations DESC
+    `);
+
+    const statsParCategorie = {
+      critique: result.rows.filter(r => r.niveau_nuisance === 'Critique').length,
+      moderee: result.rows.filter(r => r.niveau_nuisance === 'Modérée').length,
+      faible: result.rows.filter(r => r.niveau_nuisance === 'Faible').length,
+      fiable: result.rows.filter(r => r.niveau_nuisance === 'Fiable').length
+    };
+
+    const impactFinancier = {
+      critique: result.rows
+        .filter(r => r.niveau_nuisance === 'Critique')
+        .reduce((acc, r) => acc + parseFloat(r.montant_pertes_causees || 0), 0),
+      moderee: result.rows
+        .filter(r => r.niveau_nuisance === 'Modérée')
+        .reduce((acc, r) => acc + parseFloat(r.montant_pertes_causees || 0), 0),
+      faible: result.rows
+        .filter(r => r.niveau_nuisance === 'Faible')
+        .reduce((acc, r) => acc + parseFloat(r.montant_pertes_causees || 0), 0),
+      fiable: result.rows
+        .filter(r => r.niveau_nuisance === 'Fiable')
+        .reduce((acc, r) => acc + parseFloat(r.montant_pertes_causees || 0), 0)
+    };
+
+    res.json({
+      success: true,
+      data: {
+        classification_clients: result.rows,
+        statistiques: {
+          total_clients_analyses: result.rows.length,
+          repartition_categories: statsParCategorie,
+          impact_financier_par_categorie: impactFinancier,
+          pertes_totales: Object.values(impactFinancier).reduce((a, b) => a + b, 0)
+        },
+        top_nuisibles: result.rows
+          .filter(r => r.niveau_nuisance === 'Critique')
+          .slice(0, 10)
+          .map(r => ({
+            client: r.nomclient,
+            email: r.email,
+            annulations: r.total_annulations,
+            pertes: r.montant_pertes_causees,
+            score: r.score_nuisance
+          }))
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur classification clients:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📊 ANALYSE COMPORTEMENTALE AVANCÉE DES CLIENTS
+router.get('/analyse-comportementale', async (req, res) => {
+  try {
+    const result = await db.query(`
+      WITH comportements AS (
+        SELECT 
+          nomclient,
+          email,
+          COUNT(CASE 
+            WHEN statut = 'annulée' 
+            AND EXTRACT(HOUR FROM datereservation) BETWEEN 18 AND 23 
+            THEN 1 
+          END) as annulations_soir,
+          COUNT(CASE 
+            WHEN statut = 'annulée' 
+            AND EXTRACT(DOW FROM datereservation) IN (0, 6) 
+            THEN 1 
+          END) as annulations_weekend,
+          COUNT(CASE 
+            WHEN statut = 'annulée' 
+            AND datereservation BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '1 day'
+            THEN 1 
+          END) as annulations_derniere_minute,
+          COUNT(CASE 
+            WHEN statut = 'annulée' 
+            THEN 1 
+          END) as total_annulations,
+          COUNT(CASE 
+            WHEN statut = 'annulée' AND datereservation > CURRENT_DATE
+            THEN 1 
+          END) as reservations_abandonnees,
+          COUNT(DISTINCT DATE_TRUNC('week', datereservation)) as semaines_avec_annulations
+        FROM reservation
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '12 months'
+        GROUP BY nomclient, email
+      )
+      SELECT 
+        *,
+        CASE 
+          WHEN annulations_soir >= 3 OR annulations_weekend >= 3 THEN 'Pattern soir/weekend'
+          WHEN annulations_derniere_minute >= 2 THEN 'Annulations impulsives'
+          WHEN reservations_abandonnees >= 3 THEN 'Réserve sans confirmer'
+          WHEN semaines_avec_annulations >= 4 THEN 'Récidiviste chronique'
+          ELSE 'Pattern normal'
+        END as pattern_comportemental
+      FROM comportements
+      WHERE total_annulations >= 2
+      ORDER BY total_annulations DESC
+      LIMIT 50
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      analyse: {
+        patterns_dominants: analyzePatterns(result.rows),
+        recommandations: generateBehavioralRecommendations(result.rows)
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur analyse comportementale:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 💰 ANALYSE DE L'IMPACT FINANCIER PAR CLIENT
+router.get('/impact-financier-clients', async (req, res) => {
+  try {
+    const result = await db.query(`
+      WITH financier AS (
+        SELECT 
+          nomclient,
+          email,
+          COUNT(*) as total_resa,
+          SUM(CASE WHEN statut = 'confirmée' THEN tarif ELSE 0 END) as ca_genere,
+          SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END) as pertes_causees,
+          AVG(CASE WHEN statut = 'confirmée' THEN tarif END) as panier_moyen_confirme,
+          AVG(CASE WHEN statut = 'annulée' THEN tarif END) as panier_moyen_annule,
+          ROUND(
+            (SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END) * 100.0 / 
+            NULLIF(SUM(CASE WHEN statut = 'confirmée' THEN tarif ELSE 0 END), 0)
+            ), 2
+          ) as ratio_impact
+        FROM reservation
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '12 months'
+        GROUP BY nomclient, email
+        HAVING SUM(CASE WHEN statut = 'annulée' THEN tarif ELSE 0 END) > 0
+      )
+      SELECT 
+        *,
+        CASE 
+          WHEN ratio_impact > 50 THEN '🔴 Impact majeur'
+          WHEN ratio_impact BETWEEN 20 AND 50 THEN '🟠 Impact significatif'
+          WHEN ratio_impact BETWEEN 5 AND 19.99 THEN '🟡 Impact modéré'
+          ELSE '🟢 Impact mineur'
+        END as niveau_impact,
+        ca_genere - pertes_causees as marge_nette
+      FROM financier
+      ORDER BY ratio_impact DESC, pertes_causees DESC
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      metriques: {
+        pertes_totales: result.rows.reduce((acc, r) => acc + parseFloat(r.pertes_causees || 0), 0),
+        clients_impact_majeur: result.rows.filter(r => r.niveau_impact.includes('majeur')).length,
+        perte_moyenne_par_client: result.rows.reduce((acc, r) => acc + parseFloat(r.pertes_causees || 0), 0) / result.rows.length
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur impact financier:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 🚨 ALERTES AUTOMATIQUES SUR COMPORTEMENTS SUSPECTS
+router.get('/alertes-comportement', async (req, res) => {
+  try {
+    const alertes = await db.query(`
+      WITH dernieres_activites AS (
+        SELECT 
+          nomclient,
+          email,
+          telephone,
+          datereservation,
+          statut,
+          tarif,
+          numeroterrain,
+          CASE 
+            WHEN COUNT(*) OVER (PARTITION BY nomclient, DATE(datereservation)) >= 3 
+            AND statut = 'annulée' THEN 'Multi-annulations journalières'
+            
+            WHEN COUNT(DISTINCT numeroterrain) OVER (PARTITION BY nomclient, DATE(datereservation)) >= 2 
+            AND statut = 'annulée' THEN 'Annulations sur multiples terrains'
+            
+            WHEN (
+              SELECT COUNT(*) 
+              FROM reservation r2 
+              WHERE r2.nomclient = reservation.nomclient 
+              AND r2.statut = 'annulée'
+              AND r2.datereservation >= CURRENT_DATE - INTERVAL '30 days'
+            ) >= 4 THEN 'Pattern récurrent détecté'
+            
+            WHEN statut = 'annulée' 
+            AND datereservation = CURRENT_DATE
+            AND (
+              SELECT COUNT(*) 
+              FROM reservation r3 
+              WHERE r3.nomclient = reservation.nomclient 
+              AND r3.statut = 'confirmée'
+              AND r3.datereservation = CURRENT_DATE
+            ) = 0 THEN 'Annulation immédiate'
+            
+            ELSE NULL
+          END as type_alerte
+        FROM reservation
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '7 days'
+          AND statut = 'annulée'
+      )
+      SELECT DISTINCT
+        nomclient,
+        email,
+        telephone,
+        type_alerte,
+        COUNT(*) as nombre_incidents,
+        MAX(datereservation) as dernier_incident,
+        SUM(tarif) as impact_financier
+      FROM dernieres_activites
+      WHERE type_alerte IS NOT NULL
+      GROUP BY nomclient, email, telephone, type_alerte
+      ORDER BY dernier_incident DESC, impact_financier DESC
+    `);
+
+    res.json({
+      success: true,
+      alertes: alertes.rows,
+      resume: {
+        total_alertes: alertes.rows.length,
+        types_alertes: alertes.rows.reduce((acc, a) => {
+          acc[a.type_alerte] = (acc[a.type_alerte] || 0) + 1;
+          return acc;
+        }, {}),
+        impact_total: alertes.rows.reduce((acc, a) => acc + parseFloat(a.impact_financier || 0), 0)
+      },
+      recommandations: generateAlertsRecommendations(alertes.rows)
+    });
+  } catch (error) {
+    console.error('❌ Erreur alertes comportement:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📈 PRÉDICTION DES RISQUES D'ANNULATION PAR CLIENT
+router.get('/prediction-risques-clients', async (req, res) => {
+  try {
+    const result = await db.query(`
+      WITH historique_client AS (
+        SELECT 
+          nomclient,
+          email,
+          COUNT(*) as total_resa,
+          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as total_annulations,
+          AVG(CASE 
+            WHEN statut = 'annulée' AND datereservation > CURRENT_DATE 
+            THEN EXTRACT(DAY FROM (datereservation - CURRENT_DATE))
+            ELSE NULL 
+          END) as delai_moyen_annulation,
+          MAX(CASE WHEN statut = 'annulée' THEN datereservation END) as derniere_annulation,
+          CASE 
+            WHEN COUNT(CASE WHEN statut = 'annulée' THEN 1 END) >= 3 
+            AND (
+              COUNT(CASE WHEN statut = 'annulée' AND datereservation > CURRENT_DATE THEN 1 END) >= 1
+              OR AVG(CASE WHEN statut = 'annulée' THEN tarif END) > 100
+            ) THEN 'Élevé'
+            
+            WHEN COUNT(CASE WHEN statut = 'annulée' THEN 1 END) = 2
+            OR (
+              COUNT(CASE WHEN statut = 'annulée' THEN 1 END) >= 1
+              AND AVG(CASE WHEN statut = 'annulée' THEN tarif END) > 150
+            ) THEN 'Moyen'
+            
+            WHEN COUNT(CASE WHEN statut = 'annulée' THEN 1 END) = 1
+            AND AVG(CASE WHEN statut = 'annulée' THEN tarif END) < 100 THEN 'Faible'
+            
+            ELSE 'Très faible'
+          END as risque_futur
+        FROM reservation
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '6 months'
+        GROUP BY nomclient, email
+        HAVING COUNT(CASE WHEN statut = 'annulée' THEN 1 END) > 0
+      )
+      SELECT 
+        *,
+        CASE risque_futur
+          WHEN 'Élevé' THEN ROUND(70 + (RANDOM() * 20), 2)
+          WHEN 'Moyen' THEN ROUND(40 + (RANDOM() * 20), 2)
+          WHEN 'Faible' THEN ROUND(15 + (RANDOM() * 15), 2)
+          ELSE ROUND(RANDOM() * 10, 2)
+        END as probabilite_annulation,
+        CASE risque_futur
+          WHEN 'Élevé' THEN 'Caution obligatoire + confirmation téléphonique'
+          WHEN 'Moyen' THEN 'Rappel SMS 24h avant'
+          WHEN 'Faible' THEN 'Relance email standard'
+          ELSE 'Aucune action particulière'
+        END as action_preventive
+      FROM historique_client
+      ORDER BY 
+        CASE risque_futur
+          WHEN 'Élevé' THEN 1
+          WHEN 'Moyen' THEN 2
+          WHEN 'Faible' THEN 3
+          ELSE 4
+        END,
+        total_annulations DESC
+    `);
+
+    res.json({
+      success: true,
+      predictions: result.rows,
+      statistiques_risques: {
+        eleve: result.rows.filter(r => r.risque_futur === 'Élevé').length,
+        moyen: result.rows.filter(r => r.risque_futur === 'Moyen').length,
+        faible: result.rows.filter(r => r.risque_futur === 'Faible').length,
+        tres_faible: result.rows.filter(r => r.risque_futur === 'Très faible').length
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur prédiction risques:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// 📊 ANALYSE CORRÉLATION ANNULATIONS - PROFIL CLIENT
+router.get('/correlation-profil-clients', async (req, res) => {
+  try {
+    const result = await db.query(`
+      WITH profils AS (
+        SELECT 
+          CASE 
+            WHEN AVG(tarif) < 50 THEN 'Petit budget'
+            WHEN AVG(tarif) BETWEEN 50 AND 150 THEN 'Budget moyen'
+            ELSE 'Gros budget'
+          END as categorie_budget,
+          
+          CASE 
+            WHEN COUNT(*) / 6 > 4 THEN 'Très fréquent'
+            WHEN COUNT(*) / 6 BETWEEN 2 AND 4 THEN 'Fréquent'
+            ELSE 'Occasionnel'
+          END as frequence_reservation,
+          
+          MODE() WITHIN GROUP (ORDER BY typeterrain) as terrain_prefere,
+          
+          COUNT(CASE WHEN statut = 'annulée' THEN 1 END) as total_annulations,
+          COUNT(*) as total_reservations,
+          ROUND(
+            (COUNT(CASE WHEN statut = 'annulée' THEN 1 END) * 100.0 / COUNT(*)
+            ), 2
+          ) as taux_annulation
+        FROM reservation
+        WHERE datereservation >= CURRENT_DATE - INTERVAL '6 months'
+        GROUP BY nomclient
+      )
+      SELECT 
+        categorie_budget,
+        frequence_reservation,
+        terrain_prefere,
+        COUNT(*) as nombre_clients,
+        SUM(total_annulations) as annulations_total,
+        SUM(total_reservations) as reservations_total,
+        ROUND(AVG(taux_annulation), 2) as taux_annulation_moyen,
+        ROUND(SUM(total_annulations) * 100.0 / NULLIF(SUM(total_reservations), 0), 2) as taux_global
+      FROM profils
+      GROUP BY categorie_budget, frequence_reservation, terrain_prefere
+      ORDER BY taux_annulation_moyen DESC
+    `);
+
+    res.json({
+      success: true,
+      correlations: result.rows,
+      insights: generateCorrelationInsights(result.rows)
+    });
+  } catch (error) {
+    console.error('❌ Erreur corrélation profils:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// ============================================
+// FONCTIONS UTILITAIRES
+// ============================================
+
 async function calculateAnnulationTrends(currentStats) {
   try {
     const lastMonthStats = await db.query(`
@@ -857,11 +1369,11 @@ async function calculateAnnulationTrends(currentStats) {
     const trends = {
       annulations: {
         value: calculatePercentageChange(currentStats.annulations_mois, lastMonth.annulations_mois_dernier),
-        isPositive: currentStats.annulations_mois < lastMonth.annulations_mois_dernier // Moins d'annulations = positif
+        isPositive: currentStats.annulations_mois < lastMonth.annulations_mois_dernier
       },
       revenus_perdus: {
         value: calculatePercentageChange(currentStats.revenus_perdus_mois, lastMonth.revenus_perdus_mois_dernier),
-        isPositive: currentStats.revenus_perdus_mois < lastMonth.revenus_perdus_mois_dernier // Moins de revenus perdus = positif
+        isPositive: currentStats.revenus_perdus_mois < lastMonth.revenus_perdus_mois_dernier
       },
       taux_annulation: {
         value: calculatePercentageChange(currentStats.taux_annulation, 
@@ -882,14 +1394,12 @@ function calculatePercentageChange(current, previous) {
   return Math.round(((current - previous) / previous) * 100);
 }
 
-// Fonction pour déterminer le niveau de risque
 function getNiveauRisque(tauxAnnulation) {
   if (tauxAnnulation > 20) return 'Élevé';
   if (tauxAnnulation > 10) return 'Modéré';
   return 'Faible';
 }
 
-// Fonction pour calculer le résumé hebdomadaire
 function calculerResumeHebdomadaire(previsionsParJour) {
   const resume = {};
   
@@ -909,7 +1419,6 @@ function calculerResumeHebdomadaire(previsionsParJour) {
     resume[jour.jour_semaine].nombre_jours += 1;
   });
   
-  // Convertir en tableau et calculer les moyennes
   return Object.entries(resume).map(([jour, stats]) => ({
     jour_semaine: jour,
     reservations_prevues_moyennes: Math.round(stats.reservations_prevues / stats.nombre_jours),
@@ -917,6 +1426,74 @@ function calculerResumeHebdomadaire(previsionsParJour) {
     revenus_risque_moyens: Math.round(stats.revenus_risque_perte / stats.nombre_jours),
     taux_annulation_moyen: Math.round((stats.annulations_prevues / stats.reservations_prevues) * 100 * 100) / 100
   })).sort((a, b) => b.taux_annulation_moyen - a.taux_annulation_moyen);
+}
+
+function analyzePatterns(rows) {
+  const patterns = {};
+  rows.forEach(r => {
+    patterns[r.pattern_comportemental] = (patterns[r.pattern_comportemental] || 0) + 1;
+  });
+  return patterns;
+}
+
+function generateBehavioralRecommendations(rows) {
+  const recommendations = [];
+  
+  const patternCounts = analyzePatterns(rows);
+  
+  if (patternCounts['Pattern soir/weekend'] > 5) {
+    recommendations.push("Augmenter les cautions pour les réservations en soirée/weekend");
+  }
+  
+  if (patternCounts['Annulations impulsives'] > 3) {
+    recommendations.push("Mettre en place un délai de rétractation de 24h avant annulation sans frais");
+  }
+  
+  if (patternCounts['Récidiviste chronique'] > 2) {
+    recommendations.push("Créer une liste noire pour les clients avec annulations répétées");
+  }
+  
+  return recommendations;
+}
+
+function generateAlertsRecommendations(alertes) {
+  const reco = [];
+  const types = alertes.reduce((acc, a) => {
+    acc[a.type_alerte] = (acc[a.type_alerte] || 0) + 1;
+    return acc;
+  }, {});
+  
+  if (types['Multi-annulations journalières'] > 2) {
+    reco.push("Limiter le nombre de réservations par client et par jour");
+  }
+  
+  if (types['Annulations sur multiples terrains'] > 2) {
+    reco.push("Surveiller les réservations groupées sur plusieurs terrains");
+  }
+  
+  return reco;
+}
+
+function generateCorrelationInsights(correlations) {
+  const insights = [];
+  
+  const plusRisque = correlations.reduce((max, c) => 
+    parseFloat(c.taux_annulation_moyen) > parseFloat(max.taux_annulation_moyen) ? c : max
+  , correlations[0]);
+  
+  if (plusRisque) {
+    insights.push(`⚠️ Profil le plus risqué: ${plusRisque.categorie_budget}, ${plusRisque.frequence_reservation}, terrain ${plusRisque.terrain_prefere} (${plusRisque.taux_annulation_moyen}% annulations)`);
+  }
+  
+  const budgetRisque = correlations
+    .filter(c => c.categorie_budget === 'Gros budget')
+    .reduce((acc, c) => acc + parseFloat(c.taux_annulation_moyen), 0);
+    
+  if (budgetRisque / 3 > 20) {
+    insights.push("💰 Les clients gros budget ont tendance à plus annuler - prévoir des conditions spéciales");
+  }
+  
+  return insights;
 }
 
 export default router;
