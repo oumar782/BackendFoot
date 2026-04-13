@@ -22,8 +22,8 @@ import Abonne from './Gestion/Abonne.js';
 import SousAbonne from './Gestion/souscripanalyse.js';
 
 // Import manquants - À créer si nécessaire
-// import Reservation from './Gestion/reservation.js';
-// import Prevan from './Gestion/prevannule.js';
+ import Reservation from './Gestion/reservation.js';
+ import Prevan from './Gestion/prevannule.js';
 
 dotenv.config();
 const app = express();
@@ -75,14 +75,14 @@ app.use('/api/clients', Client);
 app.use('/api/user', User);
 app.use('/api/terrain', Terrain);
 app.use('/api/ana-souscription', SousAbonne);
-// app.use('/api/reservation', Reservation); // Décommentez quand le fichier existe
+ app.use('/api/reservation', Reservation); // Décommentez quand le fichier existe
 app.use('/api/contact', Contact);
 app.use('/api/gestioncreneaux', creneauxRoute);
 app.use('/api/souscription', Souscription);
 app.use('/api/demonstration', demo);
 app.use('/api/prevision', prev);
 app.use('/api/calendriers', CalendriersRouter);
-// app.use('/api/prevannule', Prevan); // Décommentez quand le fichier existe
+app.use('/api/prevannule', Prevan); // Décommentez quand le fichier existe
 app.use('/api/commande', Commande);
 app.use('/api/annalyse', Annalyse);
 app.use('/api/annalyse-creneaux', Analysecren);
