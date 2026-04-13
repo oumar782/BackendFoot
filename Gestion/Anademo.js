@@ -47,6 +47,7 @@ router.get('/analytics/demandes-par-entreprise', async (req, res) => {
                 ROUND(CAST(SUM(CASE WHEN statut IN ('Confirmé', 'Réalisé') THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as taux_conversion,
                 STRING_AGG(DISTINCT statut, ', ') as statuts
             FROM demonstration
+            WHERE entreprise IS NOT NULL AND entreprise != ''
             GROUP BY entreprise
             ORDER BY nb_demandes DESC
             LIMIT 20
@@ -75,37 +76,38 @@ router.get('/analytics/demandes-par-terrains', async (req, res) => {
     try {
         const result = await db.query(`
             SELECT 
-                nombreterrains,
+                nombreterrains::integer as nombreterrains,
                 COUNT(*) as nb_demandes,
                 SUM(CASE WHEN statut IN ('Confirmé', 'Réalisé') THEN 1 ELSE 0 END) as nb_conversions,
                 ROUND(CAST(SUM(CASE WHEN statut IN ('Confirmé', 'Réalisé') THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as taux_conversion
             FROM demonstration
-            GROUP BY nombreterrains
-            ORDER BY nombreterrains ASC
+            WHERE nombreterrains IS NOT NULL
+            GROUP BY nombreterrains::integer
+            ORDER BY nombreterrains::integer ASC
         `);
         
         // Ajout d'une segmentation par catégorie
         const categories = {
-            'Petit (1-2)': { min: 1, max: 2, total: 0, conversions: 0 },
-            'Moyen (3-5)': { min: 3, max: 5, total: 0, conversions: 0 },
-            'Grand (6-10)': { min: 6, max: 10, total: 0, conversions: 0 },
-            'Très grand (10+)': { min: 11, max: 9999, total: 0, conversions: 0 }
+            'Petit projet (1-2 terrains)': { min: 1, max: 2, total: 0, conversions: 0 },
+            'Projet moyen (3-5 terrains)': { min: 3, max: 5, total: 0, conversions: 0 },
+            'Grand projet (6-10 terrains)': { min: 6, max: 10, total: 0, conversions: 0 },
+            'Très grand projet (10+ terrains)': { min: 11, max: 999999, total: 0, conversions: 0 }
         };
         
         result.rows.forEach(row => {
-            const terrains = row.nombreterrains;
+            const terrains = parseInt(row.nombreterrains);
             if (terrains <= 2) {
-                categories['Petit (1-2)'].total += parseInt(row.nb_demandes);
-                categories['Petit (1-2)'].conversions += parseInt(row.nb_conversions);
+                categories['Petit projet (1-2 terrains)'].total += parseInt(row.nb_demandes);
+                categories['Petit projet (1-2 terrains)'].conversions += parseInt(row.nb_conversions);
             } else if (terrains <= 5) {
-                categories['Moyen (3-5)'].total += parseInt(row.nb_demandes);
-                categories['Moyen (3-5)'].conversions += parseInt(row.nb_conversions);
+                categories['Projet moyen (3-5 terrains)'].total += parseInt(row.nb_demandes);
+                categories['Projet moyen (3-5 terrains)'].conversions += parseInt(row.nb_conversions);
             } else if (terrains <= 10) {
-                categories['Grand (6-10)'].total += parseInt(row.nb_demandes);
-                categories['Grand (6-10)'].conversions += parseInt(row.nb_conversions);
+                categories['Grand projet (6-10 terrains)'].total += parseInt(row.nb_demandes);
+                categories['Grand projet (6-10 terrains)'].conversions += parseInt(row.nb_conversions);
             } else {
-                categories['Très grand (10+)'].total += parseInt(row.nb_demandes);
-                categories['Très grand (10+)'].conversions += parseInt(row.nb_conversions);
+                categories['Très grand projet (10+ terrains)'].total += parseInt(row.nb_demandes);
+                categories['Très grand projet (10+ terrains)'].conversions += parseInt(row.nb_conversions);
             }
         });
         
@@ -140,37 +142,42 @@ router.get('/analytics/demandes-par-terrains', async (req, res) => {
 router.get('/analytics/funnel', async (req, res) => {
     try {
         const result = await db.query(`
-            WITH stats AS (
-                SELECT 
-                    COUNT(*) as total_demandes,
-                    SUM(CASE WHEN statut = 'En attente' THEN 1 ELSE 0 END) as en_attente,
-                    SUM(CASE WHEN statut = 'Confirmé' THEN 1 ELSE 0 END) as confirme,
-                    SUM(CASE WHEN statut = 'Réalisé' THEN 1 ELSE 0 END) as realise,
-                    SUM(CASE WHEN statut = 'Annulé' THEN 1 ELSE 0 END) as annule
-                FROM demonstration
-            )
             SELECT 
-                total_demandes,
-                en_attente,
-                confirme,
-                realise,
-                annule,
-                ROUND(CAST(confirme AS DECIMAL) / NULLIF(total_demandes, 0) * 100, 2) as tx_attente_to_confirme,
-                ROUND(CAST(realise AS DECIMAL) / NULLIF(confirme, 0) * 100, 2) as tx_confirme_to_realise,
-                ROUND(CAST(realise AS DECIMAL) / NULLIF(total_demandes, 0) * 100, 2) as tx_global_realise
-            FROM stats
+                COUNT(*) as total_demandes,
+                SUM(CASE WHEN statut = 'En attente' THEN 1 ELSE 0 END) as en_attente,
+                SUM(CASE WHEN statut = 'Confirmé' THEN 1 ELSE 0 END) as confirme,
+                SUM(CASE WHEN statut = 'Réalisé' THEN 1 ELSE 0 END) as realise,
+                SUM(CASE WHEN statut = 'Annulé' THEN 1 ELSE 0 END) as annule,
+                ROUND(CAST(SUM(CASE WHEN statut = 'Confirmé' THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as tx_attente_to_confirme,
+                ROUND(CAST(SUM(CASE WHEN statut = 'Réalisé' THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(SUM(CASE WHEN statut = 'Confirmé' THEN 1 ELSE 0 END), 0) * 100, 2) as tx_confirme_to_realise,
+                ROUND(CAST(SUM(CASE WHEN statut = 'Réalisé' THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as tx_global_realise
+            FROM demonstration
         `);
         
+        const total = parseInt(result.rows[0].total_demandes) || 0;
+        const confirme = parseInt(result.rows[0].confirme) || 0;
+        const realise = parseInt(result.rows[0].realise) || 0;
+        
         const funnel = [
-            { etape: "Demandes reçues", valeur: parseInt(result.rows[0].total_demandes), pourcentage: 100 },
-            { etape: "Confirmées", valeur: parseInt(result.rows[0].confirme), pourcentage: parseFloat(result.rows[0].tx_attente_to_confirme) },
-            { etape: "Réalisées", valeur: parseInt(result.rows[0].realise), pourcentage: parseFloat(result.rows[0].tx_confirme_to_realise) }
+            { etape: "Demandes reçues", valeur: total, pourcentage: 100 },
+            { etape: "Confirmées", valeur: confirme, pourcentage: parseFloat(result.rows[0].tx_attente_to_confirme) || 0 },
+            { etape: "Réalisées", valeur: realise, pourcentage: parseFloat(result.rows[0].tx_global_realise) || 0 }
         ];
         
         res.json({
             success: true,
             data: {
-                synthese: result.rows[0],
+                synthese: {
+                    total_demandes: total,
+                    en_attente: parseInt(result.rows[0].en_attente) || 0,
+                    confirme: confirme,
+                    realise: realise,
+                    annule: parseInt(result.rows[0].annule) || 0,
+                    tx_attente_to_confirme: parseFloat(result.rows[0].tx_attente_to_confirme) || 0,
+                    tx_confirme_to_realise: parseFloat(result.rows[0].tx_confirme_to_realise) || 0,
+                    tx_global_realise: parseFloat(result.rows[0].tx_global_realise) || 0,
+                    tx_abandon: 100 - (parseFloat(result.rows[0].tx_global_realise) || 0)
+                },
                 funnel: funnel
             }
         });
@@ -185,35 +192,40 @@ router.get('/analytics/funnel', async (req, res) => {
 });
 
 // ============================================
-// 5. ÉVOLUTION TEMPORELLE (Mois en cours vs précédent)
+// 5. ÉVOLUTION TEMPORELLE
 // ============================================
 
 router.get('/analytics/evolution', async (req, res) => {
     try {
         const result = await db.query(`
             SELECT 
-                SUM(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', NOW()) THEN 1 ELSE 0 END) as demandes_mois_cours,
-                SUM(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', NOW() - INTERVAL '1 month') THEN 1 ELSE 0 END) as demandes_mois_prec,
-                SUM(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', NOW()) AND statut IN ('Confirmé', 'Réalisé') THEN 1 ELSE 0 END) as conversions_mois_cours,
-                SUM(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', NOW() - INTERVAL '1 month') AND statut IN ('Confirmé', 'Réalisé') THEN 1 ELSE 0 END) as conversions_mois_prec
+                COUNT(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', CURRENT_DATE) THEN 1 END) as demandes_mois_cours,
+                COUNT(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') THEN 1 END) as demandes_mois_prec,
+                COUNT(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', CURRENT_DATE) AND statut IN ('Confirmé', 'Réalisé') THEN 1 END) as conversions_mois_cours,
+                COUNT(CASE WHEN DATE_TRUNC('month', date_demande) = DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND statut IN ('Confirmé', 'Réalisé') THEN 1 END) as conversions_mois_prec
             FROM demonstration
-            WHERE date_demande >= DATE_TRUNC('month', NOW() - INTERVAL '1 month')
+            WHERE date_demande >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')
         `);
+        
+        const demandesMoisCours = parseInt(result.rows[0].demandes_mois_cours) || 0;
+        const demandesMoisPrec = parseInt(result.rows[0].demandes_mois_prec) || 0;
+        const conversionsMoisCours = parseInt(result.rows[0].conversions_mois_cours) || 0;
+        const conversionsMoisPrec = parseInt(result.rows[0].conversions_mois_prec) || 0;
         
         const evolution = {
             demandes: {
-                valeur: result.rows[0].demandes_mois_cours,
-                evolution: result.rows[0].demandes_mois_cours - result.rows[0].demandes_mois_prec,
-                pourcentage: result.rows[0].demandes_mois_prec > 0 
-                    ? ((result.rows[0].demandes_mois_cours - result.rows[0].demandes_mois_prec) / result.rows[0].demandes_mois_prec * 100).toFixed(1)
-                    : 100
+                valeur: demandesMoisCours,
+                evolution: demandesMoisCours - demandesMoisPrec,
+                pourcentage: demandesMoisPrec > 0 
+                    ? ((demandesMoisCours - demandesMoisPrec) / demandesMoisPrec * 100).toFixed(1)
+                    : demandesMoisCours > 0 ? 100 : 0
             },
             conversions: {
-                valeur: result.rows[0].conversions_mois_cours,
-                evolution: result.rows[0].conversions_mois_cours - result.rows[0].conversions_mois_prec,
-                pourcentage: result.rows[0].conversions_mois_prec > 0
-                    ? ((result.rows[0].conversions_mois_cours - result.rows[0].conversions_mois_prec) / result.rows[0].conversions_mois_prec * 100).toFixed(1)
-                    : 100
+                valeur: conversionsMoisCours,
+                evolution: conversionsMoisCours - conversionsMoisPrec,
+                pourcentage: conversionsMoisPrec > 0
+                    ? ((conversionsMoisCours - conversionsMoisPrec) / conversionsMoisPrec * 100).toFixed(1)
+                    : conversionsMoisCours > 0 ? 100 : 0
             }
         };
         
@@ -232,7 +244,7 @@ router.get('/analytics/evolution', async (req, res) => {
 });
 
 // ============================================
-// 6. SCORING DES LEADS (PRIORITÉS)
+// 6. SCORING DES LEADS
 // ============================================
 
 router.get('/analytics/lead-scoring', async (req, res) => {
@@ -243,68 +255,33 @@ router.get('/analytics/lead-scoring', async (req, res) => {
                 nom,
                 email,
                 entreprise,
-                nombreterrains,
+                nombreterrains::integer as nombreterrains,
                 message,
                 statut,
                 date_demande,
-                (
-                    CASE 
-                        WHEN nombreterrains >= 10 THEN 40
-                        WHEN nombreterrains >= 6 THEN 35
-                        WHEN nombreterrains >= 3 THEN 25
-                        WHEN nombreterrains >= 1 THEN 15
-                        ELSE 0
-                    END
-                    +
-                    CASE 
-                        WHEN LENGTH(message) > 500 THEN 25
-                        WHEN LENGTH(message) > 200 THEN 18
-                        WHEN LENGTH(message) > 100 THEN 10
-                        WHEN LENGTH(message) > 50 THEN 5
-                        ELSE 0
-                    END
-                ) as score_potentiel,
+                (COALESCE(nombreterrains::integer, 0) * 5 + LENGTH(COALESCE(message, '')) / 20) as score_potentiel,
                 CASE 
-                    WHEN (
-                        CASE 
-                            WHEN nombreterrains >= 10 THEN 40
-                            WHEN nombreterrains >= 6 THEN 35
-                            WHEN nombreterrains >= 3 THEN 25
-                            WHEN nombreterrains >= 1 THEN 15
-                            ELSE 0
-                        END
-                        +
-                        CASE 
-                            WHEN LENGTH(message) > 500 THEN 25
-                            WHEN LENGTH(message) > 200 THEN 18
-                            WHEN LENGTH(message) > 100 THEN 10
-                            WHEN LENGTH(message) > 50 THEN 5
-                            ELSE 0
-                        END
-                    ) >= 60 THEN 'HIGH'
-                    WHEN (
-                        CASE 
-                            WHEN nombreterrains >= 10 THEN 40
-                            WHEN nombreterrains >= 6 THEN 35
-                            WHEN nombreterrains >= 3 THEN 25
-                            WHEN nombreterrains >= 1 THEN 15
-                            ELSE 0
-                        END
-                        +
-                        CASE 
-                            WHEN LENGTH(message) > 500 THEN 25
-                            WHEN LENGTH(message) > 200 THEN 18
-                            WHEN LENGTH(message) > 100 THEN 10
-                            WHEN LENGTH(message) > 50 THEN 5
-                            ELSE 0
-                        END
-                    ) >= 35 THEN 'MEDIUM'
+                    WHEN COALESCE(nombreterrains::integer, 0) >= 6 THEN 'HIGH'
+                    WHEN COALESCE(nombreterrains::integer, 0) >= 3 THEN 'MEDIUM'
                     ELSE 'LOW'
                 END as priorite
             FROM demonstration
             WHERE statut = 'En attente'
             ORDER BY score_potentiel DESC
         `);
+        
+        const leads = result.rows.map(row => ({
+            ...row,
+            score_potentiel: Math.min(Math.round(row.score_potentiel), 100),
+            nombreterrains: parseInt(row.nombreterrains) || 0
+        }));
+        
+        const resume = {
+            total: leads.length,
+            high: leads.filter(r => r.priorite === 'HIGH').length,
+            medium: leads.filter(r => r.priorite === 'MEDIUM').length,
+            low: leads.filter(r => r.priorite === 'LOW').length
+        };
         
         const recommandations = {
             HIGH: "🔴 PRIORITÉ HAUTE - Contacter sous 24h",
@@ -315,13 +292,8 @@ router.get('/analytics/lead-scoring', async (req, res) => {
         res.json({
             success: true,
             data: {
-                leads: result.rows,
-                resume: {
-                    total: result.rows.length,
-                    high: result.rows.filter(r => r.priorite === 'HIGH').length,
-                    medium: result.rows.filter(r => r.priorite === 'MEDIUM').length,
-                    low: result.rows.filter(r => r.priorite === 'LOW').length
-                },
+                leads: leads,
+                resume: resume,
                 recommandations: recommandations
             }
         });
@@ -329,30 +301,41 @@ router.get('/analytics/lead-scoring', async (req, res) => {
         console.error('Erreur:', err);
         res.status(500).json({ 
             success: false, 
-            message: 'Erreur lors du scoring',
+            message: 'Erreur lors du scoring des leads',
             error: err.message 
         });
     }
 });
 
 // ============================================
-// 7. DÉLAI DE TRAITEMENT MOYEN
+// 7. DÉLAI DE TRAITEMENT
 // ============================================
 
 router.get('/analytics/delais-traitement', async (req, res) => {
     try {
         const result = await db.query(`
+            WITH traites AS (
+                SELECT 
+                    EXTRACT(EPOCH FROM (COALESCE(date_traitement, NOW()) - date_demande)) / 86400 as delai
+                FROM demonstration
+                WHERE statut IN ('Confirmé', 'Réalisé', 'Annulé')
+            )
             SELECT 
-                ROUND(AVG(EXTRACT(EPOCH FROM (date_traitement - date_demande)) / 86400), 1) as delai_moyen_jours,
-                COUNT(CASE WHEN date_traitement IS NULL AND statut = 'En attente' AND date_demande < NOW() - INTERVAL '3 days' THEN 1 END) as demandes_en_retard,
-                COUNT(CASE WHEN date_traitement IS NOT NULL AND EXTRACT(EPOCH FROM (date_traitement - date_demande)) / 86400 <= 2 THEN 1 END) as traitees_rapidement
+                ROUND(COALESCE(AVG(delai), 0), 1) as delai_moyen_jours,
+                COUNT(CASE WHEN statut = 'En attente' AND date_demande < NOW() - INTERVAL '3 days' THEN 1 END) as demandes_en_retard,
+                COUNT(CASE WHEN statut IN ('Confirmé', 'Réalisé') AND EXTRACT(EPOCH FROM (COALESCE(date_traitement, NOW()) - date_demande)) / 86400 <= 2 THEN 1 END) as traitees_rapidement
             FROM demonstration
-            WHERE statut IN ('Confirmé', 'Réalisé', 'Annulé') OR (statut = 'En attente' AND date_demande < NOW() - INTERVAL '3 days')
+            LEFT JOIN traites ON true
+            GROUP BY 1,2
         `);
         
         res.json({
             success: true,
-            data: result.rows[0]
+            data: {
+                delai_moyen_jours: parseFloat(result.rows[0]?.delai_moyen_jours) || 0,
+                demandes_en_retard: parseInt(result.rows[0]?.demandes_en_retard) || 0,
+                traitees_rapidement: parseInt(result.rows[0]?.traitees_rapidement) || 0
+            }
         });
     } catch (err) {
         console.error('Erreur:', err);
@@ -365,7 +348,7 @@ router.get('/analytics/delais-traitement', async (req, res) => {
 });
 
 // ============================================
-// 8. TABLEAU DE BORD RAPIDE (ESSENTIEL)
+// 8. TABLEAU DE BORD RAPIDE (CORRIGÉ)
 // ============================================
 
 router.get('/analytics/dashboard', async (req, res) => {
@@ -379,7 +362,7 @@ router.get('/analytics/dashboard', async (req, res) => {
             FROM demonstration
         `);
         
-        // Demandes en attente critiques
+        // Demandes en attente critiques (corrigé)
         const urgent = await db.query(`
             SELECT COUNT(*) as urgentes
             FROM demonstration
@@ -391,47 +374,49 @@ router.get('/analytics/dashboard', async (req, res) => {
         const topEntreprises = await db.query(`
             SELECT entreprise, COUNT(*) as nb_demandes
             FROM demonstration
+            WHERE entreprise IS NOT NULL AND entreprise != ''
             GROUP BY entreprise
             ORDER BY nb_demandes DESC
             LIMIT 5
         `);
         
-        // Répartition par taille de projet
+        // Répartition par taille de projet (corrigé - conversion explicite)
         const repartition = await db.query(`
             SELECT 
                 CASE 
-                    WHEN nombreterrains <= 2 THEN 'Petit projet'
-                    WHEN nombreterrains <= 5 THEN 'Projet moyen'
-                    WHEN nombreterrains <= 10 THEN 'Grand projet'
+                    WHEN nombreterrains::integer <= 2 THEN 'Petit projet'
+                    WHEN nombreterrains::integer <= 5 THEN 'Projet moyen'
+                    WHEN nombreterrains::integer <= 10 THEN 'Grand projet'
                     ELSE 'Très grand projet'
                 END as taille,
                 COUNT(*) as nb_demandes,
                 ROUND(CAST(SUM(CASE WHEN statut IN ('Confirmé', 'Réalisé') THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as tx_conversion
             FROM demonstration
+            WHERE nombreterrains IS NOT NULL
             GROUP BY 
                 CASE 
-                    WHEN nombreterrains <= 2 THEN 'Petit projet'
-                    WHEN nombreterrains <= 5 THEN 'Projet moyen'
-                    WHEN nombreterrains <= 10 THEN 'Grand projet'
+                    WHEN nombreterrains::integer <= 2 THEN 'Petit projet'
+                    WHEN nombreterrains::integer <= 5 THEN 'Projet moyen'
+                    WHEN nombreterrains::integer <= 10 THEN 'Grand projet'
                     ELSE 'Très grand projet'
                 END
-            ORDER BY MIN(nombreterrains)
+            ORDER BY MIN(nombreterrains::integer)
         `);
         
         res.json({
             success: true,
             data: {
                 synthese: {
-                    total_demandes: stats.rows[0].total,
-                    taux_conversion: stats.rows[0].tx_conversion,
-                    demandes_urgentes: urgent.rows[0].urgentes
+                    total_demandes: parseInt(stats.rows[0]?.total) || 0,
+                    taux_conversion: parseFloat(stats.rows[0]?.tx_conversion) || 0,
+                    demandes_urgentes: parseInt(urgent.rows[0]?.urgentes) || 0
                 },
-                top_entreprises: topEntreprises.rows,
-                repartition_projets: repartition.rows
+                top_entreprises: topEntreprises.rows || [],
+                repartition_projets: repartition.rows || []
             }
         });
     } catch (err) {
-        console.error('Erreur:', err);
+        console.error('Erreur détaillée:', err);
         res.status(500).json({ 
             success: false, 
             message: 'Erreur lors de la génération du dashboard',
