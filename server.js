@@ -21,7 +21,7 @@ import Analysecren from './Gestion/Analyse-cren.js';
 import Abonne from './Gestion/Abonne.js';
 import SousAbonne from './Gestion/souscripanalyse.js';
 import Créneaux from './Gestion/creneaux.js';
-
+import Contactan from './Gestion/ContactAnalytics.js';
 // Import manquants - À créer si nécessaire
  import Reservation from './Gestion/reservation.js';
  import Prevan from './Gestion/prevann.js';
@@ -92,6 +92,7 @@ app.use('/api/annalyse-abonnes', Abonne);
 app.use('/api/user-insights', UserInsights);
 app.use('/api/creneaux', Créneaux);
 app.use('/api/ana-demo', Anademo);
+app.use('/api/contact-analytics', Contactan);
 
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
