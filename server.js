@@ -25,6 +25,7 @@ import Créneaux from './Gestion/creneaux.js';
 // Import manquants - À créer si nécessaire
  import Reservation from './Gestion/reservation.js';
  import Prevan from './Gestion/prevann.js';
+ import Anademo from './Gestion/Anademo.js';
 
 dotenv.config();
 const app = express();
@@ -90,6 +91,7 @@ app.use('/api/annalyse-creneaux', Analysecren);
 app.use('/api/annalyse-abonnes', Abonne);
 app.use('/api/user-insights', UserInsights);
 app.use('/api/creneaux', Créneaux);
+app.use('/api/ana-demo', Anademo);
 
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
