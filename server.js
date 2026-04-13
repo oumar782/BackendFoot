@@ -20,6 +20,7 @@ import Annalyse from './Gestion/Annalyse-financiere.js';
 import Analysecren from './Gestion/Analyse-cren.js';
 import Abonne from './Gestion/Abonne.js';
 import SousAbonne from './Gestion/souscripanalyse.js';
+import Créneaux from './Gestion/creneaux.js';
 
 // Import manquants - À créer si nécessaire
  import Reservation from './Gestion/reservation.js';
@@ -88,6 +89,7 @@ app.use('/api/annalyse', Annalyse);
 app.use('/api/annalyse-creneaux', Analysecren);
 app.use('/api/annalyse-abonnes', Abonne);
 app.use('/api/user-insights', UserInsights);
+app.use('/api/creneaux', Créneaux);
 
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
