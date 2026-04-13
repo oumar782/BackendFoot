@@ -4,8 +4,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 
 // Importation des routes
-import creneauxRoutes from './Gestion/creneaux.js';
-import Reservation from './Gestion/reservation.js';
+import CreneauxAnalyses from './Gestion/creneaux_analyse.js';
+import Souscription from './Gestion/Souscription.js';
+import UserInsights from './Gestion/user-insights.js';
 import Contact from './Gestion/contact.js';
 import creneauxRoute from './Gestion/gestionCreneaux.js';
 import User from './Gestion/user.js';
@@ -14,11 +15,15 @@ import Client from './Gestion/clients.js';
 import CalendriersRouter from './Gestion/calendrier.js';
 import demo from './Gestion/demonstration.js';
 import prev from './Gestion/prev.js';
-import Prevan from './Gestion/prevann.js';
 import Commande from './Gestion/commande.js';
 import Annalyse from './Gestion/Annalyse-financiere.js';
 import Analysecren from './Gestion/Analyse-cren.js';
-import Abonne from './Gestion/Abonne.js'; // Nom corrigé
+import Abonne from './Gestion/Abonne.js';
+import SousAbonne from './Gestion/souscripanalyse.js';
+
+// Import manquants - À créer si nécessaire
+// import Reservation from './Gestion/reservation.js';
+// import Prevan from './Gestion/prevannule.js';
 
 dotenv.config();
 const app = express();
@@ -53,27 +58,40 @@ app.get('/', (req, res) => {
   });
 });
 
-// Utilisation des routeurs
-app.use('/api/creneaux', creneauxRoutes);
+// ============================================
+// ROUTES PRINCIPALES
+// ============================================
+
+// Route pour les analyses de créneaux (CRITIQUE - Vérifiez ceci)
+console.log('✅ Chargement du routeur CreneauxAnalyses...');
+console.log('✅ Type de CreneauxAnalyses:', typeof CreneauxAnalyses);
+console.log('✅ CreneauxAnalyses est un routeur:', CreneauxAnalyses && typeof CreneauxAnalyses.stack !== 'undefined');
+
+app.use('/api/creneaux-analyses', CreneauxAnalyses);
+console.log('✅ Routeur /api/creneaux-analyses monté avec succès');
+
+// Autres routes
 app.use('/api/clients', Client);
 app.use('/api/user', User);
 app.use('/api/terrain', Terrain);
-app.use('/api/reservation', Reservation);
+app.use('/api/ana-souscription', SousAbonne);
+// app.use('/api/reservation', Reservation); // Décommentez quand le fichier existe
 app.use('/api/contact', Contact);
 app.use('/api/gestioncreneaux', creneauxRoute);
+app.use('/api/souscription', Souscription);
 app.use('/api/demonstration', demo);
 app.use('/api/prevision', prev);
 app.use('/api/calendriers', CalendriersRouter);
-app.use('/api/prevannule', Prevan);
+// app.use('/api/prevannule', Prevan); // Décommentez quand le fichier existe
 app.use('/api/commande', Commande);
 app.use('/api/annalyse', Annalyse);
 app.use('/api/annalyse-creneaux', Analysecren);
-app.use('/api/annalyse-abonnes', Abonne); // Utilisation corrigée
+app.use('/api/annalyse-abonnes', Abonne);
+app.use('/api/user-insights', UserInsights);
 
-// 🏥 Health check endpoint amélioré
+// 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
   try {
-    // Tester la connexion à la base de données
     const dbResult = await db.query('SELECT NOW() as current_time');
     
     res.status(200).json({
@@ -111,7 +129,7 @@ app.get('/api/test-email', async (req, res) => {
       numeroterrain: 1,
       nomclient: 'Test',
       prenom: 'Utilisateur',
-      email: 'test@example.com', // Remplacez par un email valide pour tester
+      email: 'test@example.com',
       telephone: '0123456789',
       typeterrain: 'Synthétique',
       tarif: 150,
@@ -142,7 +160,6 @@ app.get('/api/test-email', async (req, res) => {
 
 // 🔧 Route pour vérifier la configuration
 app.get('/api/config', (req, res) => {
-  // Ne pas exposer les clés sensibles en production
   const safeConfig = {
     success: true,
     nodeEnv: process.env.NODE_ENV,
@@ -158,7 +175,7 @@ app.get('/api/config', (req, res) => {
   res.json(safeConfig);
 });
 
-// 🚨 Gestion des erreurs améliorée
+// 🚨 Gestion des erreurs
 app.use((err, req, res, next) => {
   console.error('❌ Erreur:', err.stack);
   
@@ -170,7 +187,6 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // Erreur Resend spécifique
   if (err.message?.includes('Resend') || err.message?.includes('email')) {
     return res.status(500).json({
       success: false,
@@ -186,30 +202,57 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 🚀 Lancement serveur avec logs détaillés
+// 🚀 Lancement serveur
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`
-🚀 Serveur FootSpace lancé sur le port ${PORT}
+╔══════════════════════════════════════════════════════════════╗
+║     🚀 SERVEUR FOOTSPACE DÉMARRÉ AVEC SUCCÈS 🚀             ║
+╚══════════════════════════════════════════════════════════════╝
+
+📡 PORT: ${PORT}
 🌍 Environnement: ${process.env.NODE_ENV || 'development'}
-📧 Resend configuré: ${process.env.RESEND_API_KEY ? '✅ OUI' : '❌ NON'}
-☁️  Cloudinary configuré: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ OUI' : '❌ NON'}
-🗄️  Base de données: ${process.env.DATABASE_URL ? '✅ CONFIGURÉE' : '❌ NON CONFIGURÉE'}
-  
-📋 Routes disponibles:
-   • GET  /api/health - Santé de l'API
-   • GET  /api/config - Configuration
-   • GET  /api/test-email - Test d'envoi d'email
-   • GET  /api/reservation - Réservations
-   • POST /api/reservation - Nouvelle réservation
+📧 Resend: ${process.env.RESEND_API_KEY ? '✅ OUI' : '❌ NON'}
+☁️  Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ OUI' : '❌ NON'}
+🗄️  Base de données: ${process.env.DATABASE_URL ? '✅ CONNECTÉE' : '❌ NON CONNECTÉE'}
+
+📋 ROUTES DISPONIBLES:
+
+🏠 BASE:
+   • GET  /                           - Accueil API
+   • GET  /api/health                 - Santé du serveur
+   • GET  /api/config                 - Configuration
+
+📊 ANALYSES CRÉNEAUX (préfixe: /api/creneaux-analyses):
+   • GET  /api/creneaux-analyses/test - Test routeur
+   • GET  /api/creneaux-analyses/occupation-analyse?periode=30jours&typeTerrain=...
+   • GET  /api/creneaux-analyses/performance-tarifaire?periode=30jours
+   • GET  /api/creneaux-analyses/creneaux-strategiques?horizon=7%20days
+   • GET  /api/creneaux-analyses/analyse-mensuelle?annee=2024&typeTerrain=...
+
+🔧 AUTRES ROUTES:
+   • GET  /api/clients                 - Gestion clients
+   • GET  /api/user                    - Gestion utilisateurs
+   • GET  /api/terrain                 - Gestion terrains
+   • GET  /api/contact                 - Gestion contacts
+   • GET  /api/gestioncreneaux         - Gestion créneaux
+   • GET  /api/demonstration           - Démonstration
+   • GET  /api/prevision               - Prévisions
+   • GET  /api/calendriers             - Calendriers
+   • GET  /api/commande                - Commandes
+   • GET  /api/annalyse                - Analyses financières
+   • GET  /api/annalyse-creneaux       - Analyses créneaux
+   • GET  /api/annalyse-abonnes        - Analyses abonnés
+   • GET  /api/user-insights           - Insights utilisateurs
+
+===============================================================
   `);
   
-  // Avertissements de configuration
   if (!process.env.RESEND_API_KEY) {
-    console.warn('⚠️  RESEND_API_KEY manquante - Les emails ne fonctionneront pas');
+    console.warn('⚠️  ATTENTION: RESEND_API_KEY manquante - Les emails ne fonctionneront pas');
   }
   if (!process.env.DATABASE_URL) {
-    console.warn('⚠️  DATABASE_URL manquante - La base de données ne fonctionnera pas');
+    console.warn('⚠️  ATTENTION: DATABASE_URL manquante - La base de données ne fonctionnera pas');
   }
 });
 
