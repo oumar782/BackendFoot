@@ -12,14 +12,12 @@ router.get('/analytics/stats', async (req, res) => {
     const result = await db.query(`
       SELECT 
         COUNT(*) as total_contacts,
-        SUM(CASE WHEN statut = 'En attente' OR statut IS NULL THEN 1 ELSE 0 END) as en_attente,
-        SUM(CASE WHEN statut = 'En cours' THEN 1 ELSE 0 END) as en_cours,
-        SUM(CASE WHEN statut = 'Résolu' THEN 1 ELSE 0 END) as resolus,
+        COUNT(DISTINCT email) as contacts_uniques,
         SUM(CASE WHEN motif = 'Réclamation' THEN 1 ELSE 0 END) as reclamations,
         SUM(CASE WHEN motif = 'Support technique' THEN 1 ELSE 0 END) as support_technique,
         SUM(CASE WHEN motif = 'Demande de démo' THEN 1 ELSE 0 END) as demandes_demo,
         SUM(CASE WHEN motif = 'Information commerciale' THEN 1 ELSE 0 END) as info_commerciale,
-        ROUND(CAST(SUM(CASE WHEN statut = 'Résolu' THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as taux_resolution
+        ROUND(AVG(LENGTH(message)), 0) as longueur_moyenne_message
       FROM contact
     `);
     
@@ -49,16 +47,16 @@ router.get('/analytics/urgent', async (req, res) => {
           WHEN motif = 'Demande de démo' THEN 'MOYENNE'
           ELSE 'BASSE'
         END as priorite,
+        EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 as heures_attente
+      FROM contact
+      ORDER BY 
         CASE 
           WHEN motif = 'Réclamation' THEN 1
           WHEN motif = 'Support technique' THEN 2
           WHEN motif = 'Demande de démo' THEN 3
           ELSE 4
-        END as ordre,
-        EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 as heures_attente
-      FROM contact
-      WHERE statut = 'En attente' OR statut IS NULL
-      ORDER BY ordre ASC, date_creation ASC
+        END ASC,
+        date_creation ASC
     `);
     
     const critique = result.rows.filter(r => r.priorite === 'CRITIQUE');
@@ -78,8 +76,8 @@ router.get('/analytics/urgent', async (req, res) => {
         },
         recommandations: {
           critique: critique.length > 0 ? "🔴 URGENT - Traiter les réclamations immédiatement" : null,
-          haute: haute.length > 0 ? "🟠 À traiter sous 4h - Support technique" : null,
-          alerte_retard: result.rows.filter(r => r.heures_attente > 24).length > 0 ? "⚠️ Contacts en attente depuis plus de 24h" : null
+          haute: haute.length > 0 ? "🟠 À traiter rapidement - Support technique" : null,
+          alerte_retard: result.rows.filter(r => r.heures_attente > 48).length > 0 ? "⚠️ Contacts en attente depuis plus de 48h" : null
         },
         contacts: {
           critique: critique,
@@ -96,7 +94,7 @@ router.get('/analytics/urgent', async (req, res) => {
 });
 
 // ============================================
-// 3. CONTACTS STAGNANTS (BACKLOG)
+// 3. CONTACTS STAGNANTS (ANCIENS)
 // ============================================
 
 router.get('/analytics/backlog', async (req, res) => {
@@ -105,34 +103,32 @@ router.get('/analytics/backlog', async (req, res) => {
       SELECT 
         id, nom, email, motif, sujet,
         date_creation,
-        EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 as heures_attente,
+        EXTRACT(EPOCH FROM (NOW() - date_creation)) / 24 as jours_attente,
         CASE 
-          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 < 24 THEN 'Vert'
-          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 < 48 THEN 'Orange'
-          ELSE 'Rouge'
-        END as niveau_alerte
+          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 < 24 THEN 'Récent'
+          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 < 72 THEN 'Ancien'
+          ELSE 'Très ancien'
+        END as anciennete
       FROM contact
-      WHERE statut = 'En attente' OR statut IS NULL
       ORDER BY date_creation ASC
     `);
     
-    const vert = result.rows.filter(r => r.niveau_alerte === 'Vert');
-    const orange = result.rows.filter(r => r.niveau_alerte === 'Orange');
-    const rouge = result.rows.filter(r => r.niveau_alerte === 'Rouge');
+    const recent = result.rows.filter(r => r.anciennete === 'Récent');
+    const ancien = result.rows.filter(r => r.anciennete === 'Ancien');
+    const tresAncien = result.rows.filter(r => r.anciennete === 'Très ancien');
     
     res.json({
       success: true,
       data: {
         synthese: {
           total: result.rows.length,
-          vert: vert.length,
-          orange: orange.length,
-          rouge: rouge.length,
-          alerte_critique: rouge.length > 0
+          recent: recent.length,
+          ancien: ancien.length,
+          tres_ancien: tresAncien.length
         },
-        contacts_orange: orange,
-        contacts_rouge: rouge,
-        action_requise: rouge.length > 0 ? "🚨 Contacter les clients en attente depuis +48h pour s'excuser" : null
+        contacts_anciens: ancien,
+        contacts_tres_anciens: tresAncien,
+        action_requise: tresAncien.length > 0 ? "📞 Prioriser les contacts très anciens" : null
       }
     });
   } catch (err) {
@@ -159,12 +155,17 @@ router.get('/analytics/scoring', async (req, res) => {
           WHEN motif = 'Information commerciale' THEN 40
           ELSE 20
         END) as score_priorite,
-        (LENGTH(message) / 10) as score_detail,
         (CASE 
-          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 > 48 THEN -30
-          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 > 24 THEN -15
+          WHEN LENGTH(message) > 500 THEN 20
+          WHEN LENGTH(message) > 200 THEN 15
+          WHEN LENGTH(message) > 100 THEN 10
+          ELSE 5
+        END) as score_detail,
+        CASE 
+          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 > 72 THEN -20
+          WHEN EXTRACT(EPOCH FROM (NOW() - date_creation)) / 3600 > 24 THEN -10
           ELSE 0
-        END) as penalite_attente,
+        END as penalite_attente,
         CASE 
           WHEN motif = 'Réclamation' THEN 'CRITIQUE'
           WHEN motif = 'Support technique' THEN 'HAUTE'
@@ -172,7 +173,6 @@ router.get('/analytics/scoring', async (req, res) => {
           ELSE 'BASSE'
         END as priorite
       FROM contact
-      WHERE statut = 'En attente' OR statut IS NULL
       ORDER BY score_priorite DESC, date_creation ASC
     `);
     
@@ -189,11 +189,10 @@ router.get('/analytics/scoring', async (req, res) => {
           score_moyen: (contactsAvecScore.reduce((a,b) => a + b.score_total, 0) / contactsAvecScore.length || 0).toFixed(1)
         },
         contacts: contactsAvecScore,
-        regles_scoring: {
-          critique: "Score > 80 → Traitement immédiat",
-          haute: "Score 60-80 → Traitement sous 4h",
-          moyenne: "Score 40-60 → Traitement sous 24h",
-          basse: "Score < 40 → Traitement sous 48h"
+        priorites: {
+          urgent: contactsAvecScore.filter(c => c.score_total >= 80),
+          a_suivre: contactsAvecScore.filter(c => c.score_total >= 60 && c.score_total < 80),
+          standard: contactsAvecScore.filter(c => c.score_total < 60)
         }
       }
     });
@@ -213,9 +212,7 @@ router.get('/analytics/by-motif', async (req, res) => {
       SELECT 
         motif,
         COUNT(*) as total,
-        SUM(CASE WHEN statut = 'Résolu' THEN 1 ELSE 0 END) as resolus,
-        ROUND(CAST(SUM(CASE WHEN statut = 'Résolu' THEN 1 ELSE 0 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 2) as taux_resolution,
-        ROUND(AVG(EXTRACT(EPOCH FROM (COALESCE(date_traitement, NOW()) - date_creation)) / 3600), 1) as delai_moyen_heures
+        COUNT(DISTINCT email) as contacts_uniques
       FROM contact
       WHERE motif IS NOT NULL
       GROUP BY motif
@@ -223,11 +220,17 @@ router.get('/analytics/by-motif', async (req, res) => {
     `);
     
     const motifPrincipal = result.rows[0]?.motif;
-    const recommandation = motifPrincipal === 'Réclamation' 
-      ? "⚠️ Les réclamations sont le motif principal - Auditer le produit/service"
-      : motifPrincipal === 'Support technique'
-      ? "🛠️ Beaucoup de support technique - Créer une base de connaissances"
-      : "📊 Analyser pourquoi ce motif est le plus fréquent";
+    let recommandation = "";
+    
+    if (motifPrincipal === 'Réclamation') {
+      recommandation = "⚠️ Les réclamations sont le motif principal - Auditer le produit/service";
+    } else if (motifPrincipal === 'Support technique') {
+      recommandation = "🛠️ Beaucoup de support technique - Créer une base de connaissances";
+    } else if (motifPrincipal === 'Demande de démo') {
+      recommandation = "📊 Fort intérêt commercial - Renforcer l'équipe sales";
+    } else {
+      recommandation = "📋 Analyser pourquoi ce motif est le plus fréquent";
+    }
     
     res.json({
       success: true,
@@ -245,88 +248,46 @@ router.get('/analytics/by-motif', async (req, res) => {
 });
 
 // ============================================
-// 6. DÉLAIS DE RÉPONSE
+// 6. TOP ÉMETTEURS (CLIENTS LES PLUS ACTIFS)
 // ============================================
 
-router.get('/analytics/response-times', async (req, res) => {
+router.get('/analytics/top-senders', async (req, res) => {
   try {
     const result = await db.query(`
       SELECT 
-        ROUND(AVG(EXTRACT(EPOCH FROM (date_premiere_reponse - date_creation)) / 3600), 1) as delai_moyen_heures,
-        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (date_premiere_reponse - date_creation)) / 3600), 1) as delai_median_heures,
-        COUNT(CASE WHEN EXTRACT(EPOCH FROM (date_premiere_reponse - date_creation)) / 3600 <= 4 THEN 1 END) as reponse_rapide,
-        COUNT(CASE WHEN EXTRACT(EPOCH FROM (date_premiere_reponse - date_creation)) / 3600 > 24 THEN 1 END) as reponse_lente,
-        COUNT(*) as total_repondu
-      FROM contact
-      WHERE date_premiere_reponse IS NOT NULL
-    `);
-    
-    const evaluation = result.rows[0].delai_moyen_heures <= 4 ? "Excellent" 
-      : result.rows[0].delai_moyen_heures <= 8 ? "Bon" 
-      : result.rows[0].delai_moyen_heures <= 24 ? "Moyen" 
-      : "À améliorer";
-    
-    res.json({
-      success: true,
-      data: {
-        ...result.rows[0],
-        evaluation: evaluation,
-        seuls: {
-          objectif: "< 4h",
-          actuel: `${result.rows[0].delai_moyen_heures || 0}h`,
-          statut: result.rows[0].delai_moyen_heures <= 4 ? "✅ Objectif atteint" : "❌ Objectif non atteint"
-        }
-      }
-    });
-  } catch (err) {
-    console.error('Erreur:', err);
-    res.status(500).json({ success: false, message: 'Erreur délais', error: err.message });
-  }
-});
-
-// ============================================
-// 7. CLIENTS À RISQUE (CONTACTENT TROP SOUVENT)
-// ============================================
-
-router.get('/analytics/at-risk-clients', async (req, res) => {
-  try {
-    const result = await db.query(`
-      SELECT 
-        email, nom,
+        email, 
+        nom,
         COUNT(*) as total_contacts,
         COUNT(CASE WHEN motif = 'Réclamation' THEN 1 END) as reclamations,
-        COUNT(CASE WHEN motif = 'Support technique' THEN 1 END) as support,
         MAX(date_creation) as dernier_contact,
-        MIN(date_creation) as premier_contact,
-        ROUND(AVG(EXTRACT(EPOCH FROM (NOW() - date_creation)) / 86400), 1) as jours_moyen_entre_contacts
+        MIN(date_creation) as premier_contact
       FROM contact
       WHERE email IS NOT NULL
       GROUP BY email, nom
-      HAVING COUNT(*) >= 2
       ORDER BY total_contacts DESC
+      LIMIT 10
     `);
     
-    const clientsRisque = result.rows.filter(r => r.total_contacts >= 5 || r.reclamations >= 2);
+    const clientsRisque = result.rows.filter(r => r.total_contacts >= 3 || r.reclamations >= 2);
     
     res.json({
       success: true,
       data: {
-        clients_actifs: result.rows,
-        clients_a_risque: clientsRisque,
+        top_emetteurs: result.rows,
+        clients_a_surveiller: clientsRisque,
         recommandation: clientsRisque.length > 0 
-          ? "📞 Contacter proactivement ces clients pour comprendre leur insatisfaction"
-          : null,
-        alerte: clientsRisque.length > 0 ? "⚠️ Clients à risque identifiés" : null
+          ? "📞 Contacter proactivement ces clients"
+          : null
       }
     });
   } catch (err) {
     console.error('Erreur:', err);
-    res.status(500).json({ success: false, message: 'Erreur clients risque', error: err.message });
+    res.status(500).json({ success: false, message: 'Erreur top émetteurs', error: err.message });
   }
 });
 
 // ============================================
-// 8. ÉVOLUTION TEMPORELLE
+// 7. ÉVOLUTION TEMPORELLE
 // ============================================
 
 router.get('/analytics/evolution', async (req, res) => {
@@ -335,7 +296,7 @@ router.get('/analytics/evolution', async (req, res) => {
       SELECT 
         DATE_TRUNC('day', date_creation) as jour,
         COUNT(*) as contacts_jour,
-        SUM(CASE WHEN motif = 'Réclamation' THEN 1 ELSE 0 END) as reclamations_jour
+        COUNT(CASE WHEN motif = 'Réclamation' THEN 1 END) as reclamations_jour
       FROM contact
       WHERE date_creation >= NOW() - INTERVAL '30 days'
       GROUP BY DATE_TRUNC('day', date_creation)
@@ -344,7 +305,10 @@ router.get('/analytics/evolution', async (req, res) => {
     
     const moyenne7j = result.rows.slice(0,7).reduce((a,b) => a + parseInt(b.contacts_jour), 0) / 7;
     const moyenne30j = result.rows.reduce((a,b) => a + parseInt(b.contacts_jour), 0) / result.rows.length;
-    const tendance = moyenne7j > moyenne30j * 1.2 ? "hausse" : moyenne7j < moyenne30j * 0.8 ? "baisse" : "stable";
+    let tendance = "stable";
+    
+    if (moyenne7j > moyenne30j * 1.2) tendance = "hausse";
+    else if (moyenne7j < moyenne30j * 0.8) tendance = "baisse";
     
     res.json({
       success: true,
@@ -353,7 +317,7 @@ router.get('/analytics/evolution', async (req, res) => {
         tendance: tendance,
         moyenne_7j: moyenne7j.toFixed(1),
         moyenne_30j: moyenne30j.toFixed(1),
-        alerte: tendance === "hausse" ? "📈 Augmentation du volume de contacts - Anticiper les ressources" : null
+        alerte: tendance === "hausse" ? "📈 Augmentation du volume de contacts" : null
       }
     });
   } catch (err) {
@@ -363,20 +327,19 @@ router.get('/analytics/evolution', async (req, res) => {
 });
 
 // ============================================
-// 9. TABLEAU DE BORD DÉCISIONNEL QUOTIDIEN
+// 8. TABLEAU DE BORD DÉCISIONNEL QUOTIDIEN
 // ============================================
 
 router.get('/analytics/daily-board', async (req, res) => {
   try {
-    // Contacts en retard
-    const contactsRetard = await db.query(`
-      SELECT COUNT(*) as en_retard
+    // Contacts très anciens (> 72h)
+    const contactsAnciens = await db.query(`
+      SELECT COUNT(*) as tres_anciens
       FROM contact
-      WHERE (statut = 'En attente' OR statut IS NULL)
-      AND date_creation < NOW() - INTERVAL '24 hours'
+      WHERE date_creation < NOW() - INTERVAL '72 hours'
     `);
     
-    // Top motif
+    // Top motif de la semaine
     const topMotif = await db.query(`
       SELECT motif, COUNT(*) as nb
       FROM contact
@@ -386,15 +349,15 @@ router.get('/analytics/daily-board', async (req, res) => {
       LIMIT 1
     `);
     
-    // Réclamations non traitées
-    const reclamationsNonTraitees = await db.query(`
+    // Réclamations non traitées (anciennes)
+    const reclamationsAnciennes = await db.query(`
       SELECT COUNT(*) as reclamations
       FROM contact
       WHERE motif = 'Réclamation'
-      AND (statut = 'En attente' OR statut IS NULL)
+      AND date_creation < NOW() - INTERVAL '24 hours'
     `);
     
-    // Clients excessifs
+    // Clients excessifs (plus de 3 contacts en 30 jours)
     const clientsExcessifs = await db.query(`
       SELECT email, nom, COUNT(*) as contacts
       FROM contact
@@ -404,39 +367,40 @@ router.get('/analytics/daily-board', async (req, res) => {
       ORDER BY contacts DESC
     `);
     
-    // Délai moyen réponse
-    const delaiMoyen = await db.query(`
-      SELECT ROUND(AVG(EXTRACT(EPOCH FROM (date_premiere_reponse - date_creation)) / 3600), 1) as delai
+    // Volume de la semaine vs semaine dernière
+    const volume = await db.query(`
+      SELECT 
+        COUNT(CASE WHEN date_creation >= DATE_TRUNC('week', NOW()) THEN 1 END) as cette_semaine,
+        COUNT(CASE WHEN date_creation >= DATE_TRUNC('week', NOW() - INTERVAL '1 week') 
+                   AND date_creation < DATE_TRUNC('week', NOW()) THEN 1 END) as semaine_derniere
       FROM contact
-      WHERE date_premiere_reponse IS NOT NULL
-      AND date_creation >= NOW() - INTERVAL '7 days'
     `);
     
     const actions = [];
-    if (contactsRetard.rows[0].en_retard > 0) actions.push("📞 Traiter les contacts en attente depuis +24h");
-    if (reclamationsNonTraitees.rows[0].reclamations > 0) actions.push("🔴 PRIORITÉ ABSOLUE - Traiter les réclamations");
-    if ((delaiMoyen.rows[0].delai || 0) > 4) actions.push("⏱️ Délai de réponse trop long - Optimiser les process");
+    if (contactsAnciens.rows[0].tres_anciens > 0) actions.push("📞 Traiter les contacts très anciens (+72h)");
+    if (reclamationsAnciennes.rows[0].reclamations > 0) actions.push("🔴 PRIORITÉ - Traiter les réclamations en attente");
     if (clientsExcessifs.rows.length > 0) actions.push("📞 Contacter proactivement les clients excessifs");
-    if (topMotif.rows[0]?.motif === 'Réclamation') actions.push("⚠️ Les réclamations sont en hausse - Alerter le service qualité");
+    if (topMotif.rows[0]?.motif === 'Réclamation') actions.push("⚠️ Les réclamations sont en hausse");
+    
+    const evolutionVolume = volume.rows[0].cette_semaine - volume.rows[0].semaine_derniere;
     
     res.json({
       success: true,
       data: {
         alertes: {
-          contacts_en_retard: contactsRetard.rows[0].en_retard,
-          reclamations_non_traitees: reclamationsNonTraitees.rows[0].reclamations,
-          delai_reponse_actuel: `${delaiMoyen.rows[0].delai || 0}h`,
-          objectif_delai: "4h"
+          contacts_tres_anciens: contactsAnciens.rows[0].tres_anciens,
+          reclamations_non_traitees: reclamationsAnciennes.rows[0].reclamations
+        },
+        volume: {
+          cette_semaine: parseInt(volume.rows[0].cette_semaine) || 0,
+          semaine_derniere: parseInt(volume.rows[0].semaine_derniere) || 0,
+          evolution: evolutionVolume,
+          tendance: evolutionVolume > 0 ? "📈 Hausse" : evolutionVolume < 0 ? "📉 Baisse" : "➡️ Stable"
         },
         top_motif_semaine: topMotif.rows[0],
         clients_excessifs: clientsExcessifs.rows,
         actions_prioritaires: actions,
-        synthese: {
-          niveau_urgence: reclamationsNonTraitees.rows[0].reclamations > 0 ? "CRITIQUE" : contactsRetard.rows[0].en_retard > 5 ? "ÉLEVÉ" : "NORMAL",
-          message: reclamationsNonTraitees.rows[0].reclamations > 0 
-            ? "🚨 Réclamations en attente - Intervention immédiate requise"
-            : "Situation normale - Suivre les process standards"
-        }
+        niveau_urgence: reclamationsAnciennes.rows[0].reclamations > 0 ? "CRITIQUE" : contactsAnciens.rows[0].tres_anciens > 5 ? "ÉLEVÉ" : "NORMAL"
       }
     });
   } catch (err) {
@@ -446,104 +410,92 @@ router.get('/analytics/daily-board', async (req, res) => {
 });
 
 // ============================================
-// 10. METTRE À JOUR LE STATUT D'UN CONTACT
+// 9. ANALYSE DES MESSAGES (LONGUEUR ET CONTENU)
 // ============================================
 
-router.put('/:id/status', async (req, res) => {
+router.get('/analytics/messages-analysis', async (req, res) => {
   try {
-    const { id } = req.params;
-    const { statut } = req.body;
-    
-    const validStatuts = ['En attente', 'En cours', 'Résolu'];
-    if (!validStatuts.includes(statut)) {
-      return res.status(400).json({ success: false, message: 'Statut invalide' });
-    }
-    
-    const sql = `
-      UPDATE contact 
-      SET statut = $1, 
-          date_traitement = CASE WHEN $1 = 'Résolu' THEN NOW() ELSE date_traitement END,
-          date_premiere_reponse = CASE WHEN date_premiere_reponse IS NULL AND $1 != 'En attente' THEN NOW() ELSE date_premiere_reponse END
-      WHERE id = $2
-      RETURNING *
-    `;
-    
-    const result = await db.query(sql, [statut, id]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Contact non trouvé' });
-    }
+    const result = await db.query(`
+      SELECT 
+        COUNT(*) as total,
+        ROUND(AVG(LENGTH(message)), 0) as longueur_moyenne,
+        COUNT(CASE WHEN LENGTH(message) < 50 THEN 1 END) as messages_courts,
+        COUNT(CASE WHEN LENGTH(message) BETWEEN 50 AND 200 THEN 1 END) as messages_moyens,
+        COUNT(CASE WHEN LENGTH(message) > 200 THEN 1 END) as messages_longs,
+        ROUND(AVG(LENGTH(message)) FILTER (WHERE motif = 'Réclamation'), 0) as longueur_moyenne_reclamation,
+        ROUND(AVG(LENGTH(message)) FILTER (WHERE motif = 'Support technique'), 0) as longueur_moyenne_support
+      FROM contact
+    `);
     
     res.json({
       success: true,
-      message: `Statut mis à jour : ${statut}`,
-      data: result.rows[0]
+      data: {
+        ...result.rows[0],
+        interpretation: {
+          messages_courts: "Messages très courts - Peuvent manquer de détails",
+          messages_longs: "Messages détaillés - Clients investis"
+        }
+      }
     });
   } catch (err) {
     console.error('Erreur:', err);
-    res.status(500).json({ success: false, message: 'Erreur mise à jour statut', error: err.message });
+    res.status(500).json({ success: false, message: 'Erreur analyse messages', error: err.message });
   }
 });
 
 // ============================================
-// 11. TABLEAU DE BORD EXÉCUTIF (VISION GLOBALE)
+// 10. TABLEAU DE BORD EXÉCUTIF (SANS TABLE EXTERNE)
 // ============================================
 
 router.get('/analytics/executive', async (req, res) => {
   try {
-    const [
-      stats,
-      motifs,
-      tendance,
-      satisfaction
-    ] = await Promise.all([
-      db.query(`
-        SELECT 
-          COUNT(*) as total,
-          COUNT(CASE WHEN statut != 'Résolu' THEN 1 END) as open,
-          ROUND(CAST(COUNT(CASE WHEN statut = 'Résolu' THEN 1 END) AS DECIMAL) / NULLIF(COUNT(*), 0) * 100, 1) as resolution_rate
-        FROM contact
-        WHERE date_creation >= DATE_TRUNC('month', NOW())
-      `),
-      db.query(`
-        SELECT motif, COUNT(*) as count
-        FROM contact
-        WHERE date_creation >= DATE_TRUNC('month', NOW())
-        GROUP BY motif
-        ORDER BY count DESC
-      `),
-      db.query(`
-        SELECT 
-          COUNT(*) as this_month,
-          LAG(COUNT(*)) OVER (ORDER BY DATE_TRUNC('month', NOW())) as last_month
-        FROM contact
-        WHERE date_creation >= DATE_TRUNC('month', NOW() - INTERVAL '1 month')
-        GROUP BY DATE_TRUNC('month', date_creation)
-      `),
-      db.query(`
-        SELECT ROUND(AVG(note), 1) as csat
-        FROM contact_satisfaction
-        WHERE date_evaluation >= DATE_TRUNC('month', NOW())
-      `)
-    ]);
+    const result = await db.query(`
+      SELECT 
+        COUNT(*) as total_contacts,
+        COUNT(DISTINCT email) as contacts_uniques,
+        COUNT(CASE WHEN motif = 'Réclamation' THEN 1 END) as reclamations,
+        COUNT(CASE WHEN motif = 'Support technique' THEN 1 END) as support,
+        COUNT(CASE WHEN motif = 'Demande de démo' THEN 1 END) as demandes_demo,
+        ROUND(COUNT(CASE WHEN motif = 'Réclamation' THEN 1 END)::DECIMAL / NULLIF(COUNT(*), 0) * 100, 1) as taux_reclamation,
+        ROUND(AVG(LENGTH(message)), 0) as longueur_moyenne_message
+      FROM contact
+      WHERE date_creation >= DATE_TRUNC('month', NOW())
+    `);
     
-    const evolution = tendance.rows[0]?.this_month - (tendance.rows[0]?.last_month || 0);
+    const evolution = await db.query(`
+      SELECT 
+        COUNT(CASE WHEN date_creation >= DATE_TRUNC('month', NOW()) THEN 1 END) as ce_mois,
+        COUNT(CASE WHEN date_creation >= DATE_TRUNC('month', NOW() - INTERVAL '1 month')
+                   AND date_creation < DATE_TRUNC('month', NOW()) THEN 1 END) as mois_dernier
+      FROM contact
+    `);
+    
+    const evolutionValue = (evolution.rows[0].ce_mois || 0) - (evolution.rows[0].mois_dernier || 0);
+    
+    let noteGlobale = "Bon";
+    if (result.rows[0].taux_reclamation > 20) noteGlobale = "À améliorer";
+    else if (result.rows[0].taux_reclamation > 10) noteGlobale = "Moyen";
+    else noteGlobale = "Excellent";
     
     res.json({
       success: true,
       data: {
         mois_cours: {
-          total: parseInt(stats.rows[0].total) || 0,
-          open: parseInt(stats.rows[0].open) || 0,
-          taux_resolution: parseFloat(stats.rows[0].resolution_rate) || 0,
-          csat: satisfaction.rows[0]?.csat || 0
+          total: parseInt(result.rows[0].total_contacts) || 0,
+          contacts_uniques: parseInt(result.rows[0].contacts_uniques) || 0,
+          reclamations: parseInt(result.rows[0].reclamations) || 0,
+          support: parseInt(result.rows[0].support) || 0,
+          demandes_demo: parseInt(result.rows[0].demandes_demo) || 0,
+          taux_reclamation: parseFloat(result.rows[0].taux_reclamation) || 0,
+          longueur_moyenne_message: parseInt(result.rows[0].longueur_moyenne_message) || 0
         },
-        evolution_vs_mois_prec: evolution,
-        top_motifs: motifs.rows,
-        note_globale: satisfaction.rows[0]?.csat >= 4.5 ? "Excellent" 
-          : satisfaction.rows[0]?.csat >= 4 ? "Bon" 
-          : satisfaction.rows[0]?.csat >= 3 ? "Moyen" 
-          : "À améliorer"
+        evolution_vs_mois_prec: evolutionValue,
+        note_globale: noteGlobale,
+        recommandation: result.rows[0].taux_reclamation > 20 
+          ? "🔴 Taux de réclamation élevé - Action prioritaire"
+          : result.rows[0].support > result.rows[0].demandes_demo
+          ? "🛠️ Plus de support que de demandes commerciales"
+          : "✅ Situation équilibrée"
       }
     });
   } catch (err) {
