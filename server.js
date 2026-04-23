@@ -26,6 +26,7 @@ import Contactan from './Gestion/ContactAnalytics.js';
  import Reservation from './Gestion/reservation.js';
  import Prevan from './Gestion/prevann.js';
  import Anademo from './Gestion/Anademo.js';
+ import Proprietaire from './Gestion/Proprietaire.js';
 
 dotenv.config();
 const app = express();
@@ -93,6 +94,7 @@ app.use('/api/user-insights', UserInsights);
 app.use('/api/creneaux', Créneaux);
 app.use('/api/ana-demo', Anademo);
 app.use('/api/contact-analytics', Contactan);
+app.use('/api/proprietaire', Proprietaire);
 
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
