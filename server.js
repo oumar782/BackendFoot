@@ -41,7 +41,8 @@ app.use(
       "https://footspace-reserve.netlify.app",
       "https://frabjous-gaufre-31e862.netlify.app",
       "https://footspace-solutions.vercel.app",
-      "https://maillot-can.vercel.app"
+      "https://maillot-can.vercel.app",
+      "https://footspace-l1rq.vercel.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
