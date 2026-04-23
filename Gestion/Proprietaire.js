@@ -1,6 +1,7 @@
 import express from 'express';
 const router = express.Router();
 import db from '../db.js';
+import crypto from 'crypto';
 
 // ============================================
 // 1. GESTION DES SOUMISSIONS DU FORMULAIRE
@@ -9,37 +10,41 @@ import db from '../db.js';
 // Soumettre une nouvelle réponse au formulaire
 router.post('/submissions', async (req, res) => {
     try {
-        const { phone, extra_comment, answers, multi_answers, language } = req.body;
+        const { phone, extra_comment, answers, multi_answers } = req.body;
         
         const submissionId = crypto.randomUUID();
         
-        // Insertion dans la table principale
+        // Insertion dans la table principale (SANS language)
         await db.query(
             `INSERT INTO terrain_form_responses 
-             (submission_id, phone, extra_comment, submitted_at, language) 
-             VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)`,
-            [submissionId, phone, extra_comment, language || 'fr']
+             (submission_id, phone, extra_comment, submitted_at) 
+             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+            [submissionId, phone || null, extra_comment || null]
         );
         
         // Insertion des réponses simples (text et single)
         for (const [questionId, answer] of Object.entries(answers || {})) {
-            await db.query(
-                `INSERT INTO terrain_form_answers 
-                 (submission_id, question_id, answer_value, answer_type, section_id) 
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [submissionId, questionId, answer, 'single', getSectionFromQuestion(questionId)]
-            );
+            if (answer && answer.trim && answer.trim() !== '') {
+                await db.query(
+                    `INSERT INTO terrain_form_answers 
+                     (submission_id, question_id, answer_value, answer_type, section_id) 
+                     VALUES ($1, $2, $3, $4, $5)`,
+                    [submissionId, questionId, answer, 'single', getSectionFromQuestion(questionId)]
+                );
+            }
         }
         
         // Insertion des réponses multi-choix
         for (const [questionId, selections] of Object.entries(multi_answers || {})) {
-            for (const selection of selections) {
-                await db.query(
-                    `INSERT INTO terrain_form_answers_multi 
-                     (submission_id, question_id, answer_selected, section_id) 
-                     VALUES ($1, $2, $3, $4)`,
-                    [submissionId, questionId, selection, getSectionFromQuestion(questionId)]
-                );
+            if (Array.isArray(selections) && selections.length > 0) {
+                for (const selection of selections) {
+                    await db.query(
+                        `INSERT INTO terrain_form_answers_multi 
+                         (submission_id, question_id, answer_selected, section_id) 
+                         VALUES ($1, $2, $3, $4)`,
+                        [submissionId, questionId, selection, getSectionFromQuestion(questionId)]
+                    );
+                }
             }
         }
         
@@ -48,7 +53,7 @@ router.post('/submissions', async (req, res) => {
             `INSERT INTO terrain_form_submission_logs 
              (submission_id, action, ip_address, user_agent) 
              VALUES ($1, $2, $3, $4)`,
-            [submissionId, 'submit', req.ip, req.headers['user-agent']]
+            [submissionId, 'submit', req.ip || null, req.headers['user-agent'] || null]
         );
         
         res.status(201).json({
@@ -131,7 +136,7 @@ router.get('/submissions', async (req, res) => {
         res.json({
             success: true,
             data: submissions,
-            pagination: { page, limit }
+            pagination: { page, limit, total: submissions.length }
         });
     } catch (err) {
         console.error('Erreur:', err);
@@ -395,7 +400,7 @@ router.get('/market/segmentation', async (req, res) => {
                 LEFT(phone, 2) as phone_prefix,
                 COUNT(*) as count
             FROM terrain_form_responses
-            WHERE phone IS NOT NULL AND phone != '' AND phone ~ '^[0-9]{10,}$'
+            WHERE phone IS NOT NULL AND phone != '' AND phone ~ '^[0-9]{2}'
             GROUP BY LEFT(phone, 2)
             ORDER BY count DESC
         `);
@@ -418,35 +423,35 @@ router.get('/market/segmentation', async (req, res) => {
 // Analyse des besoins et douleurs
 router.get('/market/needs-analysis', async (req, res) => {
     try {
-        // Principales difficultés rencontrées (q5)
+        // Principales difficultés rencontrées (q18)
         const mainDifficulties = await db.query(`
             SELECT 
                 answer_selected as difficulty,
                 COUNT(DISTINCT submission_id) as affected_users
             FROM terrain_form_answers_multi
-            WHERE question_id = 'q5'
+            WHERE question_id = 'q18'
             GROUP BY answer_selected
             ORDER BY affected_users DESC
         `);
         
-        // Fonctionnalités les plus demandées (q6)
+        // Fonctionnalités les plus demandées (q22)
         const requestedFeatures = await db.query(`
             SELECT 
                 answer_selected as feature,
                 COUNT(DISTINCT submission_id) as requests
             FROM terrain_form_answers_multi
-            WHERE question_id = 'q6'
+            WHERE question_id = 'q22'
             GROUP BY answer_selected
             ORDER BY requests DESC
         `);
         
-        // Investissement potentiel (q4)
+        // Niveau d'investissement (q20)
         const investmentReadiness = await db.query(`
             SELECT 
                 answer_value as investment_level,
                 COUNT(*) as respondents
             FROM terrain_form_answers
-            WHERE question_id = 'q4' AND answer_value IS NOT NULL
+            WHERE question_id = 'q20' AND answer_value IS NOT NULL
             GROUP BY answer_value
             ORDER BY respondents DESC
         `);
@@ -457,56 +462,6 @@ router.get('/market/needs-analysis', async (req, res) => {
                 main_difficulties: mainDifficulties.rows,
                 requested_features: requestedFeatures.rows,
                 investment_readiness: investmentReadiness.rows
-            }
-        });
-    } catch (err) {
-        console.error('Erreur:', err);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Analyse des prix et budget
-router.get('/market/pricing-analysis', async (req, res) => {
-    try {
-        // Budget (q12)
-        const budgetAnalysis = await db.query(`
-            SELECT 
-                answer_value as budget_range,
-                COUNT(*) as respondents
-            FROM terrain_form_answers
-            WHERE question_id = 'q12' AND answer_value IS NOT NULL
-            GROUP BY answer_value
-            ORDER BY respondents DESC
-        `);
-        
-        // Modèle de paiement préféré (q16)
-        const preferredPaymentModels = await db.query(`
-            SELECT 
-                answer_selected as payment_model,
-                COUNT(DISTINCT submission_id) as preferences
-            FROM terrain_form_answers_multi
-            WHERE question_id = 'q16'
-            GROUP BY answer_selected
-            ORDER BY preferences DESC
-        `);
-        
-        // Prix acceptable (q15)
-        const acceptablePricing = await db.query(`
-            SELECT 
-                answer_value as price_range,
-                COUNT(*) as respondents
-            FROM terrain_form_answers
-            WHERE question_id = 'q15' AND answer_value IS NOT NULL
-            GROUP BY answer_value
-            ORDER BY respondents DESC
-        `);
-        
-        res.json({
-            success: true,
-            data: {
-                budget_analysis: budgetAnalysis.rows,
-                preferred_payment_models: preferredPaymentModels.rows,
-                acceptable_pricing: acceptablePricing.rows
             }
         });
     } catch (err) {
@@ -528,7 +483,6 @@ router.get('/export/all', async (req, res) => {
                 r.phone,
                 r.extra_comment,
                 r.submitted_at,
-                r.language,
                 a.status,
                 a.notes,
                 (
@@ -577,7 +531,7 @@ router.get('/dashboard/summary', async (req, res) => {
                 answer_selected as value,
                 COUNT(*) as mentions
             FROM terrain_form_answers_multi
-            WHERE question_id = 'q5'
+            WHERE question_id = 'q18'
             GROUP BY answer_selected
             ORDER BY mentions DESC
             LIMIT 1
@@ -587,17 +541,17 @@ router.get('/dashboard/summary', async (req, res) => {
                 answer_selected as value,
                 COUNT(*) as mentions
             FROM terrain_form_answers_multi
-            WHERE question_id = 'q6'
+            WHERE question_id = 'q22'
             GROUP BY answer_selected
             ORDER BY mentions DESC
             LIMIT 1
             UNION ALL
             SELECT 
-                'Budget moyen' as insight_type,
+                'Problème prioritaire' as insight_type,
                 answer_value as value,
                 COUNT(*) as mentions
             FROM terrain_form_answers
-            WHERE question_id = 'q12' AND answer_value IS NOT NULL
+            WHERE question_id = 'q20' AND answer_value IS NOT NULL
             GROUP BY answer_value
             ORDER BY mentions DESC
             LIMIT 1
