@@ -22,6 +22,7 @@ import Abonne from './Gestion/Abonne.js';
 import SousAbonne from './Gestion/souscripanalyse.js';
 import Créneaux from './Gestion/creneaux.js';
 import Contactan from './Gestion/ContactAnalytics.js';
+import Joueur from './Gestion/Joueur.js';
 // Import manquants - À créer si nécessaire
  import Reservation from './Gestion/reservation.js';
  import Prevan from './Gestion/prevann.js';
@@ -96,6 +97,7 @@ app.use('/api/creneaux', Créneaux);
 app.use('/api/ana-demo', Anademo);
 app.use('/api/contact-analytics', Contactan);
 app.use('/api/proprietaire', Proprietaire);
+app.use('/api/joueur', Joueur);
 
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
