@@ -28,6 +28,7 @@ import Joueur from './Gestion/Joueur.js';
  import Prevan from './Gestion/prevann.js';
  import Anademo from './Gestion/Anademo.js';
  import Proprietaire from './Gestion/Proprietaire.js';
+ import Anareserve from './Gestion/Analyse-reservation.js';
 
 dotenv.config();
 const app = express();
@@ -99,6 +100,7 @@ app.use('/api/ana-demo', Anademo);
 app.use('/api/contact-analytics', Contactan);
 app.use('/api/proprietaire', Proprietaire);
 app.use('/api/joueur', Joueur);
+app.use('/api/analyse-reservation', Anareserve); // Décommentez quand le fichier existe
 
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
