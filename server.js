@@ -30,6 +30,7 @@ import Joueur from './Gestion/Joueur.js';
  import Proprietaire from './Gestion/Proprietaire.js';
  import Anareserve from './Gestion/Analyse-reservation.js';
  import Billet from './Fanpass/Gestionfan/Billet.js';
+ import AvailableBillets from './Fanpass/Gestionfan/billetsAvailable.js';
 
 dotenv.config();
 const app = express();
@@ -81,6 +82,7 @@ console.log('✅ Routeur /api/creneaux-analyses monté avec succès');
 // Autres routes
 app.use('/api/clients', Client);
 app.use('/api/Billet', Billet);
+app.use('/api/available-billets', AvailableBillets);
 app.use('/api/user', User);
 app.use('/api/terrain', Terrain);
 app.use('/api/ana-souscription', SousAbonne);

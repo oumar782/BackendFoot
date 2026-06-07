@@ -35,6 +35,7 @@
     "qrcode": "^1.5.4",
     "resend": "^6.1.0",
     "serverless-http": "^4.0.0",
-    "twilio": "^5.9.0"
+    "twilio": "^5.9.0",
+    "uuid": "^14.0.0"
   }
 }
