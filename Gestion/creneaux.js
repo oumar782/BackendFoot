@@ -6,7 +6,7 @@ const router = express.Router();
 // 📌 Route pour récupérer les créneaux disponibles
 router.get('/creneaux', async (req, res) => {
   try {
-    const { date, terrainType, surface } = req.query;
+    const { date, terrainType, surface, ville, quartier } = req.query;
 
     if (!date || !terrainType) {
       return res.status(400).json({ 
@@ -22,7 +22,7 @@ router.get('/creneaux', async (req, res) => {
       });
     }
 
-    // 📌 REQUÊTE SQL CORRIGÉE : ajout de WHERE clause manquante
+    // 📌 REQUÊTE SQL avec les nouveaux champs
     let sql = `
      SELECT 
         idcreneaux,
@@ -34,17 +34,33 @@ router.get('/creneaux', async (req, res) => {
         typeTerrain,
         nomterrain,
         SurfaceTerrains,
-        tarif
+        tarif,
+        ville,
+        quartier
       FROM creneaux 
       WHERE typeTerrain = $1 
         AND TO_CHAR(datecreneaux, 'YYYY-MM-DD') = $2
     `;
     
     let params = [terrainType, date];
+    let paramIndex = 3;
 
     if (surface) {
-      sql += ` AND SurfaceTerrains = $3`;
+      sql += ` AND SurfaceTerrains = $${paramIndex}`;
       params.push(surface);
+      paramIndex++;
+    }
+
+    if (ville) {
+      sql += ` AND ville = $${paramIndex}`;
+      params.push(ville);
+      paramIndex++;
+    }
+
+    if (quartier) {
+      sql += ` AND quartier = $${paramIndex}`;
+      params.push(quartier);
+      paramIndex++;
     }
 
     sql += ` ORDER BY heure`;
@@ -65,7 +81,9 @@ router.get('/creneaux', async (req, res) => {
         message: 'Aucun créneau disponible pour ces critères.',
         date_recherchee: date,
         type_terrain: terrainType,
-        surface: surface || 'non spécifiée'
+        surface: surface || 'non spécifiée',
+        ville: ville || 'non spécifiée',
+        quartier: quartier || 'non spécifié'
       });
     }
 
@@ -101,7 +119,9 @@ router.get('/creneaux/:id', async (req, res) => {
         typeTerrain,
         nomterrain,
         SurfaceTerrains,
-        tarif
+        tarif,
+        ville,
+        quartier
       FROM creneaux 
       WHERE idcreneaux = $1
     `;

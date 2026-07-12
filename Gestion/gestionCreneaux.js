@@ -7,7 +7,21 @@ const router = express.Router();
 router.get("/", async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT * FROM creneaux ORDER BY datecreneaux, heure"
+            `SELECT 
+                idcreneaux,
+                TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+                heure,
+                heurefin,
+                statut,
+                numeroterrain,
+                typeterrain,
+                nomterrain,
+                surfaceterrains,
+                tarif,
+                ville,
+                quartier
+             FROM creneaux 
+             ORDER BY datecreneaux, heure`
         );
         res.json({
             success: true,
@@ -30,7 +44,21 @@ router.get("/:id", async (req, res) => {
     
     try {
         const result = await pool.query(
-            "SELECT * FROM creneaux WHERE idcreneaux = $1",
+            `SELECT 
+                idcreneaux,
+                TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+                heure,
+                heurefin,
+                statut,
+                numeroterrain,
+                typeterrain,
+                nomterrain,
+                surfaceterrains,
+                tarif,
+                ville,
+                quartier
+             FROM creneaux 
+             WHERE idcreneaux = $1`,
             [id]
         );
 
@@ -66,7 +94,9 @@ router.post("/", async (req, res) => {
         typeterrain,
         nomterrain,
         surfaceterrains,
-        tarif
+        tarif,
+        ville,
+        quartier
     } = req.body;
 
     // Validation des champs requis
@@ -80,9 +110,21 @@ router.post("/", async (req, res) => {
     try {
         const result = await pool.query(
             `INSERT INTO creneaux 
-             (datecreneaux, heure, heurefin, statut, numeroterrain, typeterrain, nomterrain, surfaceterrains, tarif) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-             RETURNING *`,
+             (datecreneaux, heure, heurefin, statut, numeroterrain, typeterrain, nomterrain, surfaceterrains, tarif, ville, quartier) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+             RETURNING 
+                idcreneaux,
+                TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+                heure,
+                heurefin,
+                statut,
+                numeroterrain,
+                typeterrain,
+                nomterrain,
+                surfaceterrains,
+                tarif,
+                ville,
+                quartier`,
             [
                 datecreneaux,
                 heure,
@@ -92,7 +134,9 @@ router.post("/", async (req, res) => {
                 typeterrain || null,
                 nomterrain || null,
                 surfaceterrains || null,
-                tarif
+                tarif,
+                ville || null,
+                quartier || null
             ]
         );
 
@@ -106,8 +150,7 @@ router.post("/", async (req, res) => {
     } catch (err) {
         console.error("❌ Erreur lors de l'ajout du créneau:", err.message);
         
-        // Gestion des erreurs de contrainte unique
-        if (err.code === '23505') { // violation de contrainte unique
+        if (err.code === '23505') {
             return res.status(409).json({
                 success: false,
                 message: "Un créneau existe déjà pour ce terrain à cette date et heure"
@@ -134,10 +177,11 @@ router.put("/:id", async (req, res) => {
         typeterrain,
         nomterrain,
         surfaceterrains,
-        tarif
+        tarif,
+        ville,
+        quartier
     } = req.body;
 
-    // Validation des champs requis
     if (!datecreneaux || !heure || !statut || !numeroterrain || !tarif) {
         return res.status(400).json({
             success: false,
@@ -156,9 +200,23 @@ router.put("/:id", async (req, res) => {
                  typeterrain = $6, 
                  nomterrain = $7, 
                  surfaceterrains = $8, 
-                 tarif = $9 
-             WHERE idcreneaux = $10 
-             RETURNING *`,
+                 tarif = $9,
+                 ville = $10,
+                 quartier = $11
+             WHERE idcreneaux = $12 
+             RETURNING 
+                idcreneaux,
+                TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+                heure,
+                heurefin,
+                statut,
+                numeroterrain,
+                typeterrain,
+                nomterrain,
+                surfaceterrains,
+                tarif,
+                ville,
+                quartier`,
             [
                 datecreneaux,
                 heure,
@@ -169,6 +227,8 @@ router.put("/:id", async (req, res) => {
                 nomterrain || null,
                 surfaceterrains || null,
                 tarif,
+                ville || null,
+                quartier || null,
                 id
             ]
         );
@@ -211,7 +271,21 @@ router.delete("/:id", async (req, res) => {
 
     try {
         const result = await pool.query(
-            "DELETE FROM creneaux WHERE idcreneaux = $1 RETURNING *",
+            `DELETE FROM creneaux 
+             WHERE idcreneaux = $1 
+             RETURNING 
+                idcreneaux,
+                TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+                heure,
+                heurefin,
+                statut,
+                numeroterrain,
+                typeterrain,
+                nomterrain,
+                surfaceterrains,
+                tarif,
+                ville,
+                quartier`,
             [id]
         );
 
@@ -232,7 +306,6 @@ router.delete("/:id", async (req, res) => {
     } catch (err) {
         console.error("❌ Erreur lors de la suppression du créneau:", err.message);
         
-        // Gestion des contraintes de clé étrangère
         if (err.code === '23503') {
             return res.status(409).json({
                 success: false,
@@ -250,10 +323,26 @@ router.delete("/:id", async (req, res) => {
 
 // 🔍 GET - Filtrer les créneaux par date, statut, etc.
 router.get("/filtre/recherche", async (req, res) => {
-    const { date, statut, terrain } = req.query;
+    const { date, statut, terrain, ville, quartier } = req.query;
     
     try {
-        let sql = "SELECT * FROM creneaux WHERE 1=1";
+        let sql = `
+            SELECT 
+                idcreneaux,
+                TO_CHAR(datecreneaux, 'YYYY-MM-DD') as datecreneaux,
+                heure,
+                heurefin,
+                statut,
+                numeroterrain,
+                typeterrain,
+                nomterrain,
+                surfaceterrains,
+                tarif,
+                ville,
+                quartier
+            FROM creneaux 
+            WHERE 1=1
+        `;
         const params = [];
         let paramCount = 0;
 
@@ -273,6 +362,18 @@ router.get("/filtre/recherche", async (req, res) => {
             paramCount++;
             sql += ` AND numeroterrain = $${paramCount}`;
             params.push(terrain);
+        }
+
+        if (ville) {
+            paramCount++;
+            sql += ` AND ville = $${paramCount}`;
+            params.push(ville);
+        }
+
+        if (quartier) {
+            paramCount++;
+            sql += ` AND quartier = $${paramCount}`;
+            params.push(quartier);
         }
 
         sql += " ORDER BY datecreneaux, heure";
@@ -304,7 +405,8 @@ router.get("/statistiques/overview", async (req, res) => {
                 COUNT(CASE WHEN statut = 'réservé' THEN 1 END) as reserves,
                 COUNT(CASE WHEN statut = 'maintenance' THEN 1 END) as maintenance,
                 COUNT(DISTINCT numeroterrain) as terrains_actifs,
-                AVG(tarif) as tarif_moyen
+                AVG(tarif) as tarif_moyen,
+                COUNT(DISTINCT ville) as villes_disponibles
             FROM creneaux
         `);
 

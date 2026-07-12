@@ -29,8 +29,9 @@ import Joueur from './Gestion/Joueur.js';
  import Anademo from './Gestion/Anademo.js';
  import Proprietaire from './Gestion/Proprietaire.js';
  import Anareserve from './Gestion/Analyse-reservation.js';
- import Billet from './Fanpass/Gestionfan/Billet.js';
- import AvailableBillets from './Fanpass/Gestionfan/billetsAvailable.js';
+ import Sessions from './Gestion/sessions.js';
+ import Coach from './Gestion/coach.js';
+ import tournoi from './Gestion/tournoi.js';
 
 dotenv.config();
 const app = express();
@@ -81,8 +82,6 @@ console.log('✅ Routeur /api/creneaux-analyses monté avec succès');
 
 // Autres routes
 app.use('/api/clients', Client);
-app.use('/api/Billet', Billet);
-app.use('/api/available-billets', AvailableBillets);
 app.use('/api/user', User);
 app.use('/api/terrain', Terrain);
 app.use('/api/ana-souscription', SousAbonne);
@@ -104,6 +103,9 @@ app.use('/api/ana-demo', Anademo);
 app.use('/api/contact-analytics', Contactan);
 app.use('/api/proprietaire', Proprietaire);
 app.use('/api/joueur', Joueur);
+app.use('/api/sessions', Sessions);
+app.use('/api/coach', Coach);
+app.use('/api/tournoi', tournoi);
 app.use('/api/analyse-reservation', Anareserve); // Décommentez quand le fichier existe
 
 // 🏥 Health check endpoint

@@ -4,14 +4,15 @@ import { sendReservationConfirmation, checkEmailConfiguration } from '../service
 
 const router = express.Router();
 
+// ============================================
 // 📊 STATISTIQUES ET ANALYTIQUES
+// ============================================
 
 // 📌 ROUTE PRINCIPALE POUR LE TABLEAU DE BORD
 router.get('/dashboard', async (req, res) => {
   try {
     const { periode = 'mois' } = req.query;
 
-    // 1. Statistiques de base
     const statsBase = await db.query(`
       SELECT 
         COUNT(*) FILTER (WHERE statut = 'confirmée' AND datereservation = CURRENT_DATE) AS reservations_aujourdhui,
@@ -26,7 +27,6 @@ router.get('/dashboard', async (req, res) => {
       FROM reservation
     `);
 
-    // 2. Terrains occupés actuellement
     const terrainsOccupes = await db.query(`
       SELECT COUNT(DISTINCT nomterrain) AS terrains_occupes_actuels
       FROM reservation 
@@ -36,7 +36,6 @@ router.get('/dashboard', async (req, res) => {
         AND heurefin >= CURRENT_TIME
     `);
 
-    // 3. Taux de remplissage
     const tauxRemplissage = await db.query(`
       WITH reservations_recentes AS (
         SELECT 
@@ -64,7 +63,6 @@ router.get('/dashboard', async (req, res) => {
       WHERE nb_terrains_utilises > 0
     `);
 
-    // 4. Données pour les tendances
     const tendances = await db.query(`
       WITH periode_actuelle AS (
         SELECT 
@@ -148,7 +146,7 @@ router.get('/dashboard', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur dashboard:', error);
+    console.error('Erreur dashboard:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -157,7 +155,7 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// 📌 STATISTIQUES TEMPS RÉEL
+// 📌 STATISTIQUES TEMPS REEL
 router.get('/statistiques-temps-reel', async (req, res) => {
   try {
     const stats = await db.query(`
@@ -195,13 +193,13 @@ router.get('/statistiques-temps-reel', async (req, res) => {
       success: true,
       data: result,
       metriques: {
-        periode: 'temps_réel',
+        periode: 'temps_reel',
         heure_serveur: new Date().toLocaleTimeString('fr-FR')
       }
     });
 
   } catch (error) {
-    console.error('❌ Erreur statistiques temps réel:', error);
+    console.error('Erreur statistiques temps reel:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -266,7 +264,7 @@ router.get('/revenus-totaux', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur récupération revenus totaux:', error);
+    console.error('Erreur recuperation revenus totaux:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -395,7 +393,7 @@ router.get('/taux-remplissage', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur taux remplissage:', error);
+    console.error('Erreur taux remplissage:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -404,7 +402,7 @@ router.get('/taux-remplissage', async (req, res) => {
   }
 });
 
-// 📌 PRÉVISIONS DÉTAILLÉES
+// 📌 PREVISIONS DETAILLEES
 router.get('/previsions/detaillees', async (req, res) => {
   try {
     const { jours = 14 } = req.query;
@@ -513,7 +511,7 @@ router.get('/previsions/detaillees', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur prévisions détaillées:', error);
+    console.error('Erreur previsions detaillees:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -522,7 +520,7 @@ router.get('/previsions/detaillees', async (req, res) => {
   }
 });
 
-// 📌 STATISTIQUES AVANCÉES
+// 📌 STATISTIQUES AVANCEES
 router.get('/statistiques-avancees', async (req, res) => {
   try {
     const performance = await db.query(`
@@ -594,7 +592,7 @@ router.get('/statistiques-avancees', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur statistiques avancées:', error);
+    console.error('Erreur statistiques avancees:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -603,7 +601,10 @@ router.get('/statistiques-avancees', async (req, res) => {
   }
 });
 
+// ============================================
 // 📧 GESTION DES EMAILS
+// ============================================
+
 router.get('/email/config', async (req, res) => {
   try {
     const config = await checkEmailConfiguration();
@@ -616,7 +617,7 @@ router.get('/email/config', async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la vérification de la configuration email',
+      message: 'Erreur lors de la verification de la configuration email',
       error: error.message
     });
   }
@@ -646,16 +647,18 @@ router.post('/email/test', async (req, res) => {
       typeterrain: 'Synthétique',
       tarif: 150,
       nomterrain: 'Stade Principal',
-      surface: '11X11'
+      surface: '11X11',
+      ville: 'Casablanca',
+      quartier: 'Maarif'
     };
 
-    console.log('🧪 TEST EMAIL MANUEL vers:', email);
+    console.log('TEST EMAIL MANUEL vers:', email);
     const result = await sendReservationConfirmation(testReservation);
     
     if (result.success) {
       res.json({
         success: true,
-        message: '✅ Email de test envoyé avec succès',
+        message: 'Email de test envoye avec succes',
         email: email,
         messageId: result.messageId,
         timestamp: new Date().toISOString()
@@ -663,7 +666,7 @@ router.post('/email/test', async (req, res) => {
     } else {
       res.status(500).json({
         success: false,
-        message: '❌ Échec de l\'envoi de l\'email',
+        message: 'Echec de l\'envoi de l\'email',
         error: result.error,
         details: result.details,
         email: email
@@ -671,7 +674,7 @@ router.post('/email/test', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('❌ Erreur test email manuel:', error);
+    console.error('Erreur test email manuel:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur lors du test d\'email',
@@ -680,12 +683,14 @@ router.post('/email/test', async (req, res) => {
   }
 });
 
-// 🎯 CRUD COMPLET DES RÉSERVATIONS
+// ============================================
+// 🎯 CRUD COMPLET DES RESERVATIONS - CORRIGÉ
+// ============================================
 
-// 📌 Récupérer les réservations
+// 📌 Récupérer les réservations - CORRIGÉ
 router.get('/', async (req, res) => {
   try {
-    const { nom, email, statut, date, page = 1, limit = 10 } = req.query;
+    const { nom, email, statut, date, ville, quartier, page = 1, limit = 10 } = req.query;
 
     let sql = `
       SELECT 
@@ -701,7 +706,9 @@ router.get('/', async (req, res) => {
         tarif,
         surface,
         heurefin,
-        nomterrain
+        nomterrain,
+        ville,
+        quartier
       FROM reservation 
       WHERE 1=1
     `;
@@ -733,6 +740,18 @@ router.get('/', async (req, res) => {
       params.push(date);
     }
 
+    if (ville) {
+      paramCount++;
+      sql += ` AND ville ILIKE $${paramCount}`;
+      params.push(`%${ville}%`);
+    }
+
+    if (quartier) {
+      paramCount++;
+      sql += ` AND quartier ILIKE $${paramCount}`;
+      params.push(`%${quartier}%`);
+    }
+
     const countSql = `SELECT COUNT(*) as total_count FROM (${sql}) as subquery`;
     const countResult = await db.query(countSql, params);
     const totalCount = parseInt(countResult.rows[0].total_count);
@@ -741,7 +760,12 @@ router.get('/', async (req, res) => {
     sql += ` ORDER BY datereservation DESC, heurereservation DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
     params.push(parseInt(limit), offset);
 
+    console.log('📝 SQL EXÉCUTÉ:', sql);
+    console.log('📝 PARAMÈTRES:', params);
+
     const result = await db.query(sql, params);
+    
+    console.log('📊 PREMIÈRE RÉSERVATION:', result.rows[0]);
 
     res.json({
       success: true,
@@ -753,7 +777,7 @@ router.get('/', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur récupération réservations:', error);
+    console.error('Erreur recuperation reservations:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -762,7 +786,64 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ============================================
+// 🆕 NOUVELLE ROUTE - Récupérer les réservations par email
+// ============================================
+router.get('/client/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    
+    console.log('📝 Recherche des réservations pour:', email);
+    
+    const sql = `
+      SELECT 
+        numeroreservations as id,
+        TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
+        heurereservation,
+        statut,
+        nomclient,
+        prenom,
+        email,
+        telephone,
+        typeterrain,
+        tarif,
+        surface,
+        heurefin,
+        nomterrain,
+        ville,
+        quartier
+      FROM reservation 
+      WHERE email = $1
+      ORDER BY datereservation DESC
+    `;
+
+    const result = await db.query(sql, [email]);
+    
+    console.log('📊 Réservations trouvées:', result.rows.length);
+    if (result.rows.length > 0) {
+      console.log('🏙️ Première réservation - Ville:', result.rows[0].ville);
+      console.log('🏠 Première réservation - Quartier:', result.rows[0].quartier);
+    }
+
+    res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error('Erreur recuperation reservations par email:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur interne du serveur',
+      error: error.message
+    });
+  }
+});
+
+// ============================================
 // 📌 Récupérer une réservation spécifique
+// ============================================
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -781,7 +862,9 @@ router.get('/:id', async (req, res) => {
         tarif,
         surface,
         heurefin,
-        nomterrain
+        nomterrain,
+        ville,
+        quartier
       FROM reservation 
       WHERE numeroreservations = $1
     `;
@@ -791,7 +874,7 @@ router.get('/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Réservation non trouvée.'
+        message: 'Reservation non trouvee.'
       });
     }
 
@@ -801,7 +884,7 @@ router.get('/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur récupération réservation:', error);
+    console.error('Erreur recuperation reservation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -825,25 +908,29 @@ router.post('/', async (req, res) => {
       tarif,
       surface,
       heurefin,
-      nomterrain
+      nomterrain,
+      ville,
+      quartier
     } = req.body;
 
-    console.log('📝 Données reçues pour CRÉATION:', req.body);
+    console.log('📝 Donnees recues pour CREATION:', req.body);
 
     // Validation des champs obligatoires
     const champsObligatoires = [
-      { nom: 'datereservation', valeur: datereservation, message: 'Date de réservation' },
-      { nom: 'heurereservation', valeur: heurereservation, message: 'Heure de début' },
+      { nom: 'datereservation', valeur: datereservation, message: 'Date de reservation' },
+      { nom: 'heurereservation', valeur: heurereservation, message: 'Heure de debut' },
       { nom: 'heurefin', valeur: heurefin, message: 'Heure de fin' },
       { nom: 'statut', valeur: statut, message: 'Statut' },
       { nom: 'nomclient', valeur: nomclient, message: 'Nom du client' },
-      { nom: 'prenom', valeur: prenom, message: 'Prénom du client' },
+      { nom: 'prenom', valeur: prenom, message: 'Prenom du client' },
       { nom: 'email', valeur: email, message: 'Email' },
-      { nom: 'telephone', valeur: telephone, message: 'Téléphone' },
+      { nom: 'telephone', valeur: telephone, message: 'Telephone' },
       { nom: 'typeterrain', valeur: typeterrain, message: 'Type de terrain' },
       { nom: 'tarif', valeur: tarif, message: 'Tarif' },
       { nom: 'surface', valeur: surface, message: 'Surface' },
-      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' }
+      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' },
+      { nom: 'ville', valeur: ville, message: 'Ville' },
+      { nom: 'quartier', valeur: quartier, message: 'Quartier' }
     ];
 
     const champsManquants = champsObligatoires.filter(champ => 
@@ -858,42 +945,45 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Validations supplémentaires
-    if (!['Normal', 'Synthétique'].includes(typeterrain)) {
+    // Validation de l'email
+    if (!email || !email.includes('@')) {
       return res.status(400).json({
         success: false,
-        message: 'Type de terrain invalide. Doit être "Normal" ou "Synthétique".'
+        message: "Format d'email invalide."
       });
     }
 
-    if (!['7X7', '9X9', '11X11'].includes(surface)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Surface invalide. Doit être "7X7", "9X9" ou "11X11".'
-      });
-    }
-
-    if (!email.includes('@')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Format d\'email invalide.'
-      });
-    }
-
+    // Validation du tarif
     const tarifNumerique = parseFloat(tarif);
     if (isNaN(tarifNumerique) || tarifNumerique <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Tarif invalide. Doit être un nombre positif.'
+        message: 'Tarif invalide. Doit etre un nombre positif.'
       });
     }
 
+    // Insertion en base de données
     const sql = `
       INSERT INTO reservation (
         datereservation, heurereservation, statut,
-        nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING numeroreservations as id, *
+        nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain,
+        ville, quartier
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING numeroreservations as id, 
+                datereservation,
+                heurereservation,
+                statut,
+                nomclient,
+                prenom,
+                email,
+                telephone,
+                typeterrain,
+                tarif,
+                surface,
+                heurefin,
+                nomterrain,
+                ville,
+                quartier
     `;
 
     const params = [
@@ -904,28 +994,30 @@ router.post('/', async (req, res) => {
       prenom, 
       email, 
       telephone, 
-      typeterrain, 
+      typeterrain,
       tarifNumerique, 
-      surface, 
+      surface,
       heurefin, 
-      nomterrain
+      nomterrain,
+      ville || '',
+      quartier || ''
     ];
 
-    console.log('🚀 Exécution SQL CREATE avec params:', params);
+    console.log('🚀 Execution SQL CREATE avec params:', params);
 
     const result = await db.query(sql, params);
     const newReservation = result.rows[0];
 
-    console.log('✅ Réservation créée avec succès:', newReservation);
+    console.log('✅ Reservation creee avec succes:', newReservation);
 
-    // Envoi d'email si confirmée
+    // Envoi d'email si confirmee
     let emailResult = null;
     const shouldSendEmail = statut === 'confirmée' && email && email.includes('@');
     
     if (shouldSendEmail) {
       try {
         emailResult = await sendReservationConfirmation(newReservation);
-        console.log('📧 Email envoyé:', emailResult);
+        console.log('📧 Email envoye:', emailResult);
       } catch (emailError) {
         console.error('❌ Erreur envoi email:', emailError);
         emailResult = { success: false, error: emailError.message };
@@ -934,13 +1026,13 @@ router.post('/', async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Réservation créée avec succès' + (emailResult?.success ? ' et email envoyé' : ''),
+      message: 'Reservation creee avec succes' + (emailResult?.success ? ' et email envoye' : ''),
       data: newReservation,
       email: emailResult
     });
 
   } catch (error) {
-    console.error('❌ Erreur création réservation:', error);
+    console.error('❌ Erreur creation reservation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -966,25 +1058,29 @@ router.put('/:id', async (req, res) => {
       tarif,
       surface,
       heurefin,
-      nomterrain
+      nomterrain,
+      ville,
+      quartier
     } = req.body;
 
-    console.log('📝 Données reçues pour MODIFICATION:', req.body);
+    console.log('📝 Donnees recues pour MODIFICATION:', req.body);
 
     // Validation des champs obligatoires
     const champsObligatoires = [
-      { nom: 'datereservation', valeur: datereservation, message: 'Date de réservation' },
-      { nom: 'heurereservation', valeur: heurereservation, message: 'Heure de début' },
+      { nom: 'datereservation', valeur: datereservation, message: 'Date de reservation' },
+      { nom: 'heurereservation', valeur: heurereservation, message: 'Heure de debut' },
       { nom: 'heurefin', valeur: heurefin, message: 'Heure de fin' },
       { nom: 'statut', valeur: statut, message: 'Statut' },
       { nom: 'nomclient', valeur: nomclient, message: 'Nom du client' },
-      { nom: 'prenom', valeur: prenom, message: 'Prénom du client' },
+      { nom: 'prenom', valeur: prenom, message: 'Prenom du client' },
       { nom: 'email', valeur: email, message: 'Email' },
-      { nom: 'telephone', valeur: telephone, message: 'Téléphone' },
+      { nom: 'telephone', valeur: telephone, message: 'Telephone' },
       { nom: 'typeterrain', valeur: typeterrain, message: 'Type de terrain' },
       { nom: 'tarif', valeur: tarif, message: 'Tarif' },
       { nom: 'surface', valeur: surface, message: 'Surface' },
-      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' }
+      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' },
+      { nom: 'ville', valeur: ville, message: 'Ville' },
+      { nom: 'quartier', valeur: quartier, message: 'Quartier' }
     ];
 
     const champsManquants = champsObligatoires.filter(champ => 
@@ -1008,7 +1104,7 @@ router.put('/:id', async (req, res) => {
     if (oldReservationResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Réservation non trouvée.'
+        message: 'Reservation non trouvee.'
       });
     }
 
@@ -1020,7 +1116,7 @@ router.put('/:id', async (req, res) => {
     if (isNaN(tarifNumerique) || tarifNumerique <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Tarif invalide. Doit être un nombre positif.'
+        message: 'Tarif invalide. Doit etre un nombre positif.'
       });
     }
 
@@ -1038,9 +1134,25 @@ router.put('/:id', async (req, res) => {
         tarif = $9,
         surface = $10,
         heurefin = $11,
-        nomterrain = $12
-      WHERE numeroreservations = $13
-      RETURNING numeroreservations as id, *
+        nomterrain = $12,
+        ville = $13,
+        quartier = $14
+      WHERE numeroreservations = $15
+      RETURNING numeroreservations as id,
+                datereservation,
+                heurereservation,
+                statut,
+                nomclient,
+                prenom,
+                email,
+                telephone,
+                typeterrain,
+                tarif,
+                surface,
+                heurefin,
+                nomterrain,
+                ville,
+                quartier
     `;
 
     const params = [
@@ -1055,16 +1167,18 @@ router.put('/:id', async (req, res) => {
       tarifNumerique, 
       surface, 
       heurefin, 
-      nomterrain, 
+      nomterrain,
+      ville || '',
+      quartier || '',
       id
     ];
 
-    console.log('🚀 Exécution SQL UPDATE avec params:', params);
+    console.log('🚀 Execution SQL UPDATE avec params:', params);
 
     const result = await db.query(sql, params);
     const updatedReservation = result.rows[0];
 
-    console.log('✅ Réservation modifiée avec succès:', updatedReservation);
+    console.log('✅ Reservation modifiee avec succes:', updatedReservation);
 
     // Envoi d'email si statut changé vers confirmée
     let emailResult = null;
@@ -1074,7 +1188,7 @@ router.put('/:id', async (req, res) => {
     if (becameConfirmed && hasValidEmail) {
       try {
         emailResult = await sendReservationConfirmation(updatedReservation);
-        console.log('📧 Email envoyé:', emailResult);
+        console.log('📧 Email envoye:', emailResult);
       } catch (emailError) {
         console.error('❌ Erreur envoi email:', emailError);
         emailResult = { success: false, error: emailError.message };
@@ -1083,13 +1197,13 @@ router.put('/:id', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Réservation mise à jour avec succès' + (emailResult?.success ? ' et email envoyé' : ''),
+      message: 'Reservation mise a jour avec succes' + (emailResult?.success ? ' et email envoye' : ''),
       data: updatedReservation,
       email: emailResult
     });
 
   } catch (error) {
-    console.error('❌ Erreur mise à jour réservation:', error);
+    console.error('❌ Erreur mise a jour reservation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -1111,18 +1225,18 @@ router.delete('/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Réservation non trouvée.'
+        message: 'Reservation non trouvee.'
       });
     }
 
     res.json({
       success: true,
-      message: 'Réservation supprimée avec succès.',
+      message: 'Reservation supprimee avec succes.',
       data: result.rows[0]
     });
 
   } catch (error) {
-    console.error('❌ Erreur suppression réservation:', error);
+    console.error('❌ Erreur suppression reservation:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -1153,7 +1267,7 @@ router.put('/:id/statut', async (req, res) => {
     if (oldReservationResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Réservation non trouvée.'
+        message: 'Reservation non trouvee.'
       });
     }
 
@@ -1164,7 +1278,21 @@ router.put('/:id/statut', async (req, res) => {
       UPDATE reservation 
       SET statut = $1
       WHERE numeroreservations = $2
-      RETURNING numeroreservations as id, *
+      RETURNING numeroreservations as id,
+                datereservation,
+                heurereservation,
+                statut,
+                nomclient,
+                prenom,
+                email,
+                telephone,
+                typeterrain,
+                tarif,
+                surface,
+                heurefin,
+                nomterrain,
+                ville,
+                quartier
     `;
 
     const result = await db.query(sql, [statut, id]);
@@ -1186,13 +1314,13 @@ router.put('/:id/statut', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Statut mis à jour avec succès' + (emailResult?.success ? ' et email envoyé' : ''),
+      message: 'Statut mis a jour avec succes' + (emailResult?.success ? ' et email envoye' : ''),
       data: reservation,
       email: emailResult
     });
 
   } catch (error) {
-    console.error('❌ Erreur mise à jour statut:', error);
+    console.error('❌ Erreur mise a jour statut:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
@@ -1207,6 +1335,8 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
     const sql = `
       SELECT 
         nomterrain,
+        ville,
+        quartier,
         COUNT(*) as nb_reservations,
         STRING_AGG(
           CONCAT(heurereservation, '-', heurefin, ' (', nomclient, ')'), 
@@ -1215,7 +1345,7 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
       FROM reservation 
       WHERE datereservation = CURRENT_DATE 
         AND statut = 'confirmée'
-      GROUP BY nomterrain
+      GROUP BY nomterrain, ville, quartier
       ORDER BY nomterrain
     `;
 
@@ -1228,7 +1358,7 @@ router.get('/aujourd-hui/terrains', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erreur réservations aujourd\'hui:', error);
+    console.error('❌ Erreur reservations aujourd\'hui:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur interne du serveur',
