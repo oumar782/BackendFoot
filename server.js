@@ -32,6 +32,11 @@ import Joueur from './Gestion/Joueur.js';
  import Sessions from './Gestion/sessions.js';
  import Coach from './Gestion/coach.js';
  import tournoi from './Gestion/tournoi.js';
+ import Boutique from './Gestion/Boutique.js';
+ //sesi hair 
+ import prestation from './Gestion/Prestasesi.js';
+ import contactesi from './Gestion/contactsesi.js';
+ import Appointments from './Gestion/Appointments.js';
 
 dotenv.config();
 const app = express();
@@ -47,8 +52,7 @@ app.use(
       "https://frabjous-gaufre-31e862.netlify.app",
       "https://footspace-solutions.vercel.app",
       "https://maillot-can.vercel.app",
-      "https://recueil-joueur.vercel.app",
-      "https://footspace-l1rq.vercel.app"
+     
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -106,8 +110,12 @@ app.use('/api/joueur', Joueur);
 app.use('/api/sessions', Sessions);
 app.use('/api/coach', Coach);
 app.use('/api/tournoi', tournoi);
+app.use('/api/boutique', Boutique);
 app.use('/api/analyse-reservation', Anareserve); // Décommentez quand le fichier existe
-
+//sesi
+app.use('/api/prestation', prestation);
+app.use('/api/contactesi', contactesi);
+app.use('/api/Appointments', Appointments);
 // 🏥 Health check endpoint
 app.get('/api/health', async (req, res) => {
   try {
