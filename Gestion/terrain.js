@@ -1,8 +1,11 @@
 // routes/terrains.js
 import express from "express";
 import pool from "../db.js";
+import { requireAuth, requireManagerOrAdmin, isAdmin } from '../middleware/auth.js';
+import { ownedTerrain, tenantFilter } from '../middleware/tenant.js';
 
 const router = express.Router();
+router.use(requireAuth, requireManagerOrAdmin);
 
 // CREATE - Créer un nouveau terrain
 router.post("/", async (req, res) => {
@@ -14,7 +17,7 @@ router.post("/", async (req, res) => {
         tarif,
         equipementdispo,
         photo,
-        idclient
+        idclient, manager_id, ville, quartier
     } = req.body;
 
     // Validation des champs requis
@@ -28,8 +31,8 @@ router.post("/", async (req, res) => {
     try {
         const result = await pool.query(
             `INSERT INTO terrains 
-             (nomterrain, typeTerrain, surface, descriptions, tarif, equipementdispo, photo, idclient) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+             (nomterrain, typeTerrain, surface, descriptions, tarif, equipementdispo, photo, idclient, manager_id, ville, quartier) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
              RETURNING *`,
             [
                 nomterrain,
@@ -39,7 +42,10 @@ router.post("/", async (req, res) => {
                 tarif,
                 equipementdispo || null,
                 photo || null,
-                idclient || null
+                idclient || null,
+                isAdmin(req.user) ? (manager_id || null) : req.user.managerId,
+                ville || null,
+                quartier || null
             ]
         );
 
@@ -64,9 +70,8 @@ router.post("/", async (req, res) => {
 // READ - Récupérer tous les terrains
 router.get("/", async (req, res) => {
     try {
-        const result = await pool.query(
-            "SELECT * FROM terrains ORDER BY numeroterrain"
-        );
+        const scope = tenantFilter(req, 'manager_id');
+        const result = await pool.query(`SELECT * FROM terrains WHERE 1=1${scope.sql} ORDER BY numeroterrain`, scope.params);
         
         res.json({
             success: true,
@@ -88,12 +93,9 @@ router.get("/:id", async (req, res) => {
     const id = req.params.id;
     
     try {
-        const result = await pool.query(
-            "SELECT * FROM terrains WHERE numeroterrain = $1",
-            [id]
-        );
+        const terrain = await ownedTerrain(pool, req, id);
 
-        if (result.rows.length === 0) {
+        if (!terrain) {
             return res.status(404).json({
                 success: false,
                 message: "Terrain non trouvé"
@@ -102,7 +104,7 @@ router.get("/:id", async (req, res) => {
 
         res.json({
             success: true,
-            data: result.rows[0]
+            data: terrain
         });
     } catch (err) {
         console.error("❌ Erreur lors de la récupération du terrain:", err.message);
@@ -137,6 +139,9 @@ router.put("/:id", async (req, res) => {
     }
 
     try {
+        if (!await ownedTerrain(pool, req, id)) {
+            return res.status(404).json({ success: false, message: "Terrain non trouvé" });
+        }
         const result = await pool.query(
             `UPDATE terrains 
              SET nomterrain = $1, typeTerrain = $2, surface = $3, descriptions = $4, 
@@ -186,6 +191,9 @@ router.delete("/:id", async (req, res) => {
     const id = req.params.id;
 
     try {
+        if (!await ownedTerrain(pool, req, id)) {
+            return res.status(404).json({ success: false, message: "Terrain non trouvé" });
+        }
         const result = await pool.query(
             "DELETE FROM terrains WHERE numeroterrain = $1 RETURNING *",
             [id]

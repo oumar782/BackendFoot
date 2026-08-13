@@ -1,7 +1,9 @@
 import express from 'express';
 import db from '../db.js';
+import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics } from '../middleware/auth.js';
 
 const router = express.Router();
+router.use(requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics);
 
 // 🔍 Analyse de l'occupation des créneaux par période
 router.get('/occupation-analyse', async (req, res) => {

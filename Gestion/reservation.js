@@ -1,8 +1,23 @@
 import express from 'express';
 import db from '../db.js';
 import { sendReservationConfirmation, checkEmailConfiguration } from '../services/emailService.js';
+import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics, isAdmin } from '../middleware/auth.js';
+import { ownedReservation, ownedTerrain, tenantFilter } from '../middleware/tenant.js';
 
 const router = express.Router();
+
+// The reservation creation endpoint remains public for the marketplace. Every
+// other endpoint is management data and obtains its tenant from the JWT only.
+router.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/') return next();
+  return requireAuth(req, res, (error) => error || requireManagerOrAdmin(req, res, next));
+});
+// Legacy aggregate endpoints below have global SQL. Only the CRUD endpoints
+// whose queries are joined to terrains are exposed to a manager.
+router.use((req, res, next) => {
+  if (isAdmin(req.user) || req.method === 'POST' || req.path === '/' || /^\/\d+(?:\/statut)?$/.test(req.path)) return next();
+  return requireAdminForGlobalAnalytics(req, res, next);
+});
 
 // ============================================
 // 📊 STATISTIQUES ET ANALYTIQUES
@@ -694,61 +709,58 @@ router.get('/', async (req, res) => {
 
     let sql = `
       SELECT 
-        numeroreservations as id,
-        TO_CHAR(datereservation, 'YYYY-MM-DD') as datereservation,
-        heurereservation,
-        statut,
-        nomclient,
-        prenom,
-        email,
-        telephone,
-        typeterrain,
-        tarif,
-        surface,
-        heurefin,
-        nomterrain,
-        ville,
-        quartier
-      FROM reservation 
+        r.numeroreservations as id,
+        TO_CHAR(r.datereservation, 'YYYY-MM-DD') as datereservation,
+        r.heurereservation, r.statut, r.nomclient, r.prenom, r.email,
+        r.telephone, r.typeterrain, r.tarif, r.surface, r.heurefin,
+        r.nomterrain, r.ville, r.quartier
+      FROM reservation r
+      JOIN terrains t ON t.numeroterrain = r.numeroterrain
       WHERE 1=1
     `;
 
     const params = [];
     let paramCount = 0;
 
+    if (!isAdmin(req.user)) {
+      paramCount++;
+      sql += ` AND t.manager_id = $${paramCount}`;
+      params.push(req.user.managerId);
+    }
+
     if (nom) {
       paramCount++;
-      sql += ` AND nomclient ILIKE $${paramCount}`;
+      sql += ` AND r.nomclient ILIKE $${paramCount}`;
       params.push(`%${nom}%`);
     }
 
     if (email) {
       paramCount++;
-      sql += ` AND email ILIKE $${paramCount}`;
+      sql += ` AND r.email ILIKE $${paramCount}`;
       params.push(`%${email}%`);
     }
 
     if (statut) {
       paramCount++;
-      sql += ` AND statut = $${paramCount}`;
+      sql += ` AND r.statut = $${paramCount}`;
       params.push(statut);
     }
 
     if (date) {
       paramCount++;
-      sql += ` AND datereservation = $${paramCount}`;
+      sql += ` AND r.datereservation = $${paramCount}`;
       params.push(date);
     }
 
     if (ville) {
       paramCount++;
-      sql += ` AND ville ILIKE $${paramCount}`;
+      sql += ` AND r.ville ILIKE $${paramCount}`;
       params.push(`%${ville}%`);
     }
 
     if (quartier) {
       paramCount++;
-      sql += ` AND quartier ILIKE $${paramCount}`;
+      sql += ` AND r.quartier ILIKE $${paramCount}`;
       params.push(`%${quartier}%`);
     }
 
@@ -847,6 +859,9 @@ router.get('/client/:email', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!await ownedReservation(db, req, id)) {
+      return res.status(404).json({ success: false, message: 'Reservation non trouvee.' });
+    }
 
     const sql = `
       SELECT 
@@ -909,6 +924,8 @@ router.post('/', async (req, res) => {
       surface,
       heurefin,
       nomterrain,
+      numeroterrain,
+      creneau_id,
       ville,
       quartier
     } = req.body;
@@ -928,9 +945,7 @@ router.post('/', async (req, res) => {
       { nom: 'typeterrain', valeur: typeterrain, message: 'Type de terrain' },
       { nom: 'tarif', valeur: tarif, message: 'Tarif' },
       { nom: 'surface', valeur: surface, message: 'Surface' },
-      { nom: 'nomterrain', valeur: nomterrain, message: 'Nom du terrain' },
-      { nom: 'ville', valeur: ville, message: 'Ville' },
-      { nom: 'quartier', valeur: quartier, message: 'Quartier' }
+      { nom: 'numeroterrain', valeur: numeroterrain || req.body.terrainId, message: 'Numéro de terrain' }
     ];
 
     const champsManquants = champsObligatoires.filter(champ => 
@@ -944,6 +959,9 @@ router.post('/', async (req, res) => {
         message: `Champs obligatoires manquants: ${champsManquants.map(c => c.message).join(', ')}`
       });
     }
+
+    const terrain = await ownedTerrain(db, { user: { role: 'admin' } }, numeroterrain || req.body.terrainId);
+    if (!terrain) return res.status(404).json({ success: false, message: 'Terrain public non trouvé' });
 
     // Validation de l'email
     if (!email || !email.includes('@')) {
@@ -967,8 +985,8 @@ router.post('/', async (req, res) => {
       INSERT INTO reservation (
         datereservation, heurereservation, statut,
         nomclient, prenom, email, telephone, typeterrain, tarif, surface, heurefin, nomterrain,
-        ville, quartier
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ville, quartier, numeroterrain, creneau_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING numeroreservations as id, 
                 datereservation,
                 heurereservation,
@@ -994,13 +1012,15 @@ router.post('/', async (req, res) => {
       prenom, 
       email, 
       telephone, 
-      typeterrain,
+      terrain.typeterrain,
       tarifNumerique, 
-      surface,
+      terrain.surface,
       heurefin, 
-      nomterrain,
-      ville || '',
-      quartier || ''
+      terrain.nomterrain,
+      terrain.ville || null,
+      terrain.quartier || null,
+      terrain.numeroterrain,
+      creneau_id || null
     ];
 
     console.log('🚀 Execution SQL CREATE avec params:', params);
@@ -1046,6 +1066,9 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!await ownedReservation(db, req, id)) {
+      return res.status(404).json({ success: false, message: 'Reservation non trouvee.' });
+    }
     const {
       datereservation,
       heurereservation,
@@ -1217,6 +1240,9 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!await ownedReservation(db, req, id)) {
+      return res.status(404).json({ success: false, message: 'Reservation non trouvee.' });
+    }
 
     const sql = 'DELETE FROM reservation WHERE numeroreservations = $1 RETURNING numeroreservations as id, *';
 
@@ -1249,6 +1275,9 @@ router.delete('/:id', async (req, res) => {
 router.put('/:id/statut', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!await ownedReservation(db, req, id)) {
+      return res.status(404).json({ success: false, message: 'Reservation non trouvee.' });
+    }
     const { statut } = req.body;
 
     if (!statut || !['confirmée', 'annulée', 'en attente', 'terminée'].includes(statut)) {

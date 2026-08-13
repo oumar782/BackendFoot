@@ -1,8 +1,13 @@
 // routes/calendriers.js
 import express from "express";
 import pool from "../db.js";
+import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics } from '../middleware/auth.js';
 
 const router = express.Router();
+// Calendar entries have no reliable terrain foreign key in the legacy schema.
+// Until migration data is backfilled, deny manager access rather than expose
+// another tenant's calendar. Administrators retain the existing global view.
+router.use(requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics);
 
 // CREATE - Créer une nouvelle entrée calendrier
 router.post("/", async (req, res) => {

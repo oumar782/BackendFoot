@@ -1,6 +1,7 @@
 // routes/users.js
 import express from "express";
 import pool from "../db.js";
+import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
@@ -293,6 +294,16 @@ router.post("/login", async (req, res) => {
         }
 
         const user = result.rows[0];
+        const role = String(user.typeuser || '').toLowerCase();
+        const managerId = ['gestionnaire', 'manager'].includes(role) ? user.iduser : null;
+        if (!process.env.JWT_SECRET) {
+            return res.status(500).json({ success: false, message: "JWT_SECRET non configuré" });
+        }
+        const token = jwt.sign(
+            { userId: user.iduser, role: user.typeuser, typeuser: user.typeuser, managerId },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+        );
         
         // Ne pas renvoyer le mot de passe dans la réponse
         const { mdp: _, ...userWithoutPassword } = user;
@@ -300,7 +311,8 @@ router.post("/login", async (req, res) => {
         res.json({
             success: true,
             message: "Connexion réussie",
-            data: userWithoutPassword
+            data: userWithoutPassword,
+            token
         });
     } catch (err) {
         console.error("❌ Erreur lors de l'authentification:", err.message);
