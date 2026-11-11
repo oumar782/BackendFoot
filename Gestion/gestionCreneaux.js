@@ -1,6 +1,6 @@
 import express from 'express';
 import pool from '../db.js';
-import { requireAuth, requireManagerOrAdmin } from '../middleware/auth.js';
+import { requireAuth, requireManagerOrAdmin } from './Auth.js';
 import { ownedCreneau, ownedTerrain, tenantFilter } from '../middleware/tenant.js';
 
 const router = express.Router();

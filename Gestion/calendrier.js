@@ -1,7 +1,7 @@
 // routes/calendriers.js
 import express from "express";
 import pool from "../db.js";
-import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics } from '../middleware/auth.js';
+import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics } from './Auth.js';
 
 const router = express.Router();
 // Calendar entries have no reliable terrain foreign key in the legacy schema.

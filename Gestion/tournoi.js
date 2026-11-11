@@ -1,8 +1,10 @@
 // routes/tournoi.js
 import express from "express";
+import { randomUUID } from "crypto";
 import pool from "../db.js";
 
 const router = express.Router();
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // ============================================
 // 📋 GET - Récupérer tous les tournois
@@ -250,7 +252,7 @@ router.post("/", async (req, res) => {
     }
 
     try {
-        const tournamentId = id || `t${Date.now()}`;
+        const tournamentId = UUID_REGEX.test(id || '') ? id : randomUUID();
         
         const result = await pool.query(
             `INSERT INTO tournaments 

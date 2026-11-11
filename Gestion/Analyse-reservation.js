@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import db from '../db.js';
-import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics } from '../middleware/auth.js';
+import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics } from './Auth.js';
 
 const router = Router();
 router.use(requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics);

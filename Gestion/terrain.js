@@ -1,7 +1,7 @@
 // routes/terrains.js
 import express from "express";
 import pool from "../db.js";
-import { requireAuth, requireManagerOrAdmin, isAdmin } from '../middleware/auth.js';
+import { requireAuth, requireManagerOrAdmin, isAdmin } from './Auth.js';
 import { ownedTerrain, tenantFilter } from '../middleware/tenant.js';
 
 const router = express.Router();

@@ -1,0 +1,92 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Tournament Analytics Manager API",
+    "version": "1.0.0",
+    "description": "API backend modulaire, multi-tenant et sécurisée pour la gestion de tournois et d'analyses financières."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000/api/v1",
+      "description": "Serveur local principal"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Vérification d'état de l'API",
+        "security": [],
+        "responses": {
+          "200": { "description": "API opérationnelle" }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "summary": "Créer une organisation et le compte propriétaire (owner)",
+        "security": [],
+        "responses": {
+          "201": { "description": "Compte et organisation créés avec succès" }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "Authentifier un utilisateur et retourner un jeton JWT",
+        "security": [],
+        "responses": {
+          "200": { "description": "Authentification réussie" }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "summary": "Profil de l'utilisateur connecté",
+        "responses": {
+          "200": { "description": "Données utilisateur et organisation" }
+        }
+      }
+    },
+    "/organizations/me": {
+      "get": {
+        "summary": "Détails de l'organisation courante",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "put": {
+        "summary": "Mettre à jour l'organisation courante",
+        "responses": { "200": { "description": "Mis à jour avec succès" } }
+      }
+    },
+    "/tournaments": {
+      "get": { "summary": "Lister les tournois de l'organisation (filtrage, recherche, tri, pagination)" },
+      "post": { "summary": "Créer un tournoi" }
+    },
+    "/rankings/{tournamentId}": {
+      "get": { "summary": "Calculer le classement d'un tournoi à partir des scores validés" }
+    },
+    "/analytics/finance": {
+      "get": { "summary": "Aggrégation financière, marges, ROI et ventilation" }
+    },
+    "/reports/financial": {
+      "get": { "summary": "Générer un rapport financier d'organisation" }
+    },
+    "/activity-logs": {
+      "get": { "summary": "Consulter les journaux d'audit de l'organisation" }
+    }
+  }
+}
+

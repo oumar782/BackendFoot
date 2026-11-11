@@ -1,0 +1,52 @@
+[dotenv@17.2.1] injecting env (8) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+[dotenv@17.2.1] injecting env (0) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+🔄 Vérification du schéma Tournament Analytics...
+[dotenv@17.2.1] injecting env (0) from .env -- tip: 📡 auto-backup env with Radar: https://dotenvx.com/radar
+✅ Chargement du routeur CreneauxAnalyses...
+✅ Type de CreneauxAnalyses: function
+✅ CreneauxAnalyses est un routeur: true
+✅ Routeur /api/creneaux-analyses monté avec succès
+
+╔══════════════════════════════════════════════════════════════╗
+║     🚀 SERVEUR FOOTSPACE DÉMARRÉ AVEC SUCCÈS 🚀             ║
+╚══════════════════════════════════════════════════════════════╝
+
+📡 PORT: 5000
+🌍 Environnement: development
+📧 Resend: ✅ OUI
+☁️  Cloudinary: ✅ OUI
+🗄️  Base de données: ✅ CONNECTÉE
+
+📋 ROUTES DISPONIBLES:
+
+🏠 BASE:
+   • GET  /                           - Accueil API
+   • GET  /api/health                 - Santé du serveur
+   • GET  /api/config                 - Configuration
+
+📊 ANALYSES CRÉNEAUX (préfixe: /api/creneaux-analyses):
+   • GET  /api/creneaux-analyses/test - Test routeur
+   • GET  /api/creneaux-analyses/occupation-analyse?periode=30jours&typeTerrain=...
+   • GET  /api/creneaux-analyses/performance-tarifaire?periode=30jours
+   • GET  /api/creneaux-analyses/creneaux-strategiques?horizon=7%20days
+   • GET  /api/creneaux-analyses/analyse-mensuelle?annee=2024&typeTerrain=...
+
+🔧 AUTRES ROUTES:
+   • GET  /api/clients                 - Gestion clients
+   • GET  /api/user                    - Gestion utilisateurs
+   • GET  /api/terrain                 - Gestion terrains
+   • GET  /api/contact                 - Gestion contacts
+   • GET  /api/gestioncreneaux         - Gestion créneaux
+   • GET  /api/demonstration           - Démonstration
+   • GET  /api/prevision               - Prévisions
+   • GET  /api/calendriers             - Calendriers
+   • GET  /api/commande                - Commandes
+   • GET  /api/annalyse                - Analyses financières
+   • GET  /api/annalyse-creneaux       - Analyses créneaux
+   • GET  /api/annalyse-abonnes        - Analyses abonnés
+   • GET  /api/user-insights           - Insights utilisateurs
+
+===============================================================
+  
+✅ Connecté à Supabase PostgreSQL: 2026-10-04T13:23:16.733Z
+✅ Schéma Tournament Analytics vérifié et prêt !

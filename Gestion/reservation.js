@@ -1,7 +1,7 @@
 import express from 'express';
 import db from '../db.js';
 import { sendReservationConfirmation, checkEmailConfiguration } from '../services/emailService.js';
-import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics, isAdmin } from '../middleware/auth.js';
+import { requireAuth, requireManagerOrAdmin, requireAdminForGlobalAnalytics, isAdmin } from './Auth.js';
 import { ownedReservation, ownedTerrain, tenantFilter } from '../middleware/tenant.js';
 
 const router = express.Router();
